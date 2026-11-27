@@ -1,5 +1,5 @@
 --[[
-    River Hunter · HunterSuite v5.1 (Zero-Kick Anti-Flicker Land Walk & Moto Sync, Tree/Roof Filter, Town Canal Dropoff & Clean Trajectory)
+    River Hunter · HunterSuite v5.2 (Full 24/7 AFK Certified: Syntax Fix, Respawn Auto-Resume, Dual-Layer Anti-AFK, Bulletproof Defense Recovery & Starred-Bucket Guard)
     - Event Fish Fast-Path & Map System Exploit: Spatial Anchor Platform + Instant Ghostfang Intercept + Red Water Goliath Farm + Zone Spoofer
     - Full-System Economy Exploitation (Module 12): Cross-Plot Pond Fish Siphoning, Aerial Police Evasion, Dex Bounty Sweep, Remote Vendor Liquidation
     - Fix Fish Stall Sell (shop.far): Live prompt stand CFrame (-18.00, 6.50, 8.80) + server sync + 3x retry
@@ -56,7 +56,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
 local Window = Fluent:CreateWindow({
-    Title = "ZeluxHub v5.1",
+    Title = "ZeluxHub v5.2",
     SubTitle = "ZeluxHub-River Hunter · Precision Economy, Loy Krathong Event & Auto Suite",
     TabWidth = 165,
     Size = UDim2.fromOffset(620, 520),
@@ -4513,6 +4513,26 @@ checkAutoSell = function()
     local shouldSellOnThreshold = CFG.AutoSell and (bucketCount >= effectiveThreshold)
     if not (shouldSellOnFull or shouldSellOnThreshold) then return false end
 
+    -- ป้องกันล่องเรือวนไปตลาดฟรีเมื่อปลาในถังทุกตัวติดดาว (fav) และปิดการขายปลาติดดาวไว้
+    if not CFG.SellAllIncludeFavorites and typeof(RUNTIME.lastBucketList) == "table" and #RUNTIME.lastBucketList > 0 then
+        local sellableN = 0
+        for _, f in ipairs(RUNTIME.lastBucketList) do
+            if typeof(f) == "table" and f.fav ~= true then
+                local uid = tonumber(f.uid)
+                if not (uid and RUNTIME.starredUids and RUNTIME.starredUids[uid]) then
+                    sellableN = sellableN + 1
+                end
+            end
+        end
+        if sellableN == 0 then
+            if (now - (RUNTIME.lastAllStarredWarnAt or 0)) >= 120.0 then
+                RUNTIME.lastAllStarredWarnAt = now
+                notify({ Title = "⭐ ปลาในถังติดดาวครบทุกตัว", Content = "พักการวิ่งไปขายชั่วคราว (ปลดดาวหรือเปิด 'ขายรวมปลาติดดาว' เพื่อให้ AFK ขายต่อ)", Duration = 5 })
+            end
+            return false
+        end
+    end
+
     if RUNTIME.noChangeSellCount and bucketCount <= RUNTIME.noChangeSellCount and now < (RUNTIME.noChangePauseUntil or 0) then
         return false
     end
@@ -5762,18 +5782,51 @@ task.spawn(function()
     end
 end)
 
+-- Dual-Layer Anti-AFK (กันหลุด 20 นาที 100%: ปิด Idle Hook เก่า + ยิง VirtualUser + พัลส์ทุก 10 นาที)
+do
+    local getcons = getgenv().getconnections or getgenv().get_signal_cons
+    if typeof(getcons) == "function" then
+        pcall(function()
+            for _, c in ipairs(getcons(lp.Idled)) do
+                if typeof(c.Disable) == "function" then pcall(function() c:Disable() end) end
+            end
+        end)
+    end
+end
 table.insert(RUNTIME.connections, lp.Idled:Connect(function()
-    if CFG.AntiAFK and vu then pcall(function() vu:CaptureController() vu:ClickButton2(Vector2.new(0, 0)) end) end
+    if CFG.AntiAFK and vu then
+        pcall(function()
+            vu:CaptureController()
+            vu:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera and workspace.CurrentCamera.CFrame or CFrame.new())
+            task.wait(0.05)
+            vu:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera and workspace.CurrentCamera.CFrame or CFrame.new())
+            vu:ClickButton2(Vector2.new(0, 0))
+        end)
+    end
 end))
+task.spawn(function()
+    while RUNTIME.alive do
+        task.wait(480)
+        if RUNTIME.alive and CFG.AntiAFK and vu then
+            pcall(function()
+                vu:CaptureController()
+                vu:ClickButton2(Vector2.new(0, 0))
+            end)
+        end
+    end
+end)
 
 table.insert(RUNTIME.connections, lp.CharacterAdded:Connect(function(char)
-    local humClean = char:WaitForChild("Humanoid", 3) or char:FindFirstChildOfClass("Humanoid")
+    local humClean = char:WaitForChild("Humanoid", 4) or char:FindFirstChildOfClass("Humanoid")
     if humClean then setAntiSeatLock(humClean, false) end
     RUNTIME.busyMode = nil
     RUNTIME.busySince = 0
+    RUNTIME.cancelTravelRequested = false
     RUNTIME.isSelling, RUNTIME.isBridging, RUNTIME.isPilotingBoat, RUNTIME.isDrivingMoto = false, false, false, false
+    RUNTIME.isDefendingPond, RUNTIME.isRecallingForTheft, RUNTIME.isReturningHomeForNight = false, false, false
     RUNTIME.motoRail = nil
     RUNTIME.motoAutoCtrl = nil
+    RUNTIME.boatAutoTarget = nil
     RUNTIME.isRoundTripping, RUNTIME.isSiphoningPonds, RUNTIME.bossHuntActive = false, false, false
     fightStateTable, tugStateTable, reelStateTable, rodStateTable = nil, nil, nil, nil
     cachedPrompts = {}
@@ -5798,6 +5851,21 @@ table.insert(RUNTIME.connections, lp.CharacterAdded:Connect(function(char)
         RUNTIME.economyPlatform = nil
     end
     log("Character respawned: State machines, caches & platforms reset.")
+
+    -- AFK Auto-Resume หลังเกิดใหม่: กลับไปหมายตกปลาเดิม + หยิบคันเบ็ดตีสายต่ออัตโนมัติ
+    task.spawn(function()
+        task.wait(2.0)
+        if not RUNTIME.alive or lp.Character ~= char then return end
+        if CFG.AutoFish and not isBusy() and not RUNTIME.isGuardingHomeAtNight then
+            local hrpNew = getMyHRP()
+            local backCF = RUNTIME.lastFishingSpotCF
+            if hrpNew and backCF and (hrpNew.Position - backCF.Position).Magnitude > 30.0 then
+                notify({ Title = "♻️ เกิดใหม่ระหว่าง AFK", Content = "กำลังเดินทางกลับหมายตกปลาเดิมและเริ่มตกต่ออัตโนมัติ...", Duration = 4 })
+                Modules.boatAutoTravelTo(backCF, "หมายตกปลาเดิม", { equipRod = true })
+            end
+            resumeFishingAfterWarp(backCF)
+        end
+    end)
 end))
 
 Input:FireServer("bucket")
@@ -8099,56 +8167,58 @@ function Modules.onHomeDefenseSignal(kind, data)
             return
         end
 
-        -- กรณีตกปลาอยู่ไกลบ้าน (> 220 สตัด) และเปิด AutoRecallOnTheft -> รีบกลับบ้านมาไล่ตีโจรเอาของคืนแล้วกลับหมายเดิม!
+        -- กรณีตกปลาอยู่ไกลบ้าน (> 220 สตัด) และเปิด AutoRecallOnTheft -> รีบกลับบ้านมาไล่ตีโจรเอาของคืนแล้วกลับหมายเดิม! (หุ้ม pcall กันล็อก AutoFish ถาวร 100%)
         if CFG.AutoRecallOnTheft and (kind == "siren" or kind == "pet_spot" or kind == "thief_attr" or kind == "notice") then
             RUNTIME.isRecallingForTheft = true
+            RUNTIME.recallTheftSince = os.clock()
             local savedCF = RUNTIME.lastFishingSpotCF or hrp.CFrame
             local savedAutoFish = CFG.AutoFish
             CFG.AutoFish = false
+
             pcall(function()
                 if Modules.recallAllRodsOnStop then Modules.recallAllRodsOnStop() end
-            end)
-            notify({
-                Title = "🚨 ฉุกเฉิน! มีโจรบุกบ้านขณะออกตกปลา",
-                Content = "กำลังเร่งเดินทางกลับบ้านเพื่อไล่ตีโจรและทวงปลาคืน!",
-                Duration = 5
-            })
-            if isBusy() then
-                RUNTIME.cancelTravelRequested = true
-                task.wait(0.35)
-            end
-
-            local arrived = Modules.boatAutoTravelTo(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), "บ้านของฉัน (ฉุกเฉิน)")
-            if not arrived then
-                Modules.safeOverlandTravel(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), 22.0)
-            end
-
-            -- ไล่ตีโจร/ผู้บุกรุกทุกคนที่อยู่ในบ้านจนสะอาด
-            local tScan = os.clock()
-            while RUNTIME.alive and (os.clock() - tScan) < 25.0 do
-                local freshGeo = resolvePondGeometry(myPlot) or geo
-                local th, _, rsn = findBestHomeThreat(freshGeo, true, true)
-                if th then
-                    Modules.executePondDefenseCombat(th, freshGeo, rsn)
+                notify({
+                    Title = "🚨 ฉุกเฉิน! มีโจรบุกบ้านขณะออกตกปลา",
+                    Content = "กำลังเร่งเดินทางกลับบ้านเพื่อไล่ตีโจรและทวงปลาคืน!",
+                    Duration = 5
+                })
+                if isBusy() then
+                    RUNTIME.cancelTravelRequested = true
                     task.wait(0.35)
-                else
-                    break
                 end
-            end
 
-            -- กลับไปหมายตกปลาเดิมถ้าไม่ได้อยู่ในโหมดเฝ้าบ้านกลางคืน
-            if not RUNTIME.isGuardingHomeAtNight and savedCF then
-                local curH = getMyHRP()
-                if curH and (curH.Position - savedCF.Position).Magnitude > 45.0 then
-                    notify({ Title = "🎣 เคลียร์โจรเรียบร้อย!", Content = "กำลังกลับไปตกปลาที่หมายเดิม...", Duration = 4 })
-                    Modules.boatAutoTravelTo(savedCF, "หมายตกปลาเดิม", { equipRod = true })
-                    if Modules.ensureSafeWaterFooting then Modules.ensureSafeWaterFooting(savedCF) end
+                local arrived = Modules.boatAutoTravelTo(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), "บ้านของฉัน (ฉุกเฉิน)")
+                if not arrived then
+                    Modules.safeOverlandTravel(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), 22.0)
                 end
-            end
+
+                local tScan = os.clock()
+                while RUNTIME.alive and (os.clock() - tScan) < 25.0 do
+                    local freshGeo = resolvePondGeometry(myPlot) or geo
+                    local th, _, rsn = findBestHomeThreat(freshGeo, true, true)
+                    if th then
+                        Modules.executePondDefenseCombat(th, freshGeo, rsn)
+                        task.wait(0.35)
+                    else
+                        break
+                    end
+                end
+
+                if not RUNTIME.isGuardingHomeAtNight and savedCF then
+                    local curH = getMyHRP()
+                    if curH and (curH.Position - savedCF.Position).Magnitude > 45.0 then
+                        notify({ Title = "🎣 เคลียร์โจรเรียบร้อย!", Content = "กำลังกลับไปตกปลาที่หมายเดิม...", Duration = 4 })
+                        Modules.boatAutoTravelTo(savedCF, "หมายตกปลาเดิม", { equipRod = true })
+                        if Modules.ensureSafeWaterFooting then Modules.ensureSafeWaterFooting(savedCF) end
+                    end
+                end
+            end)
+
             RUNTIME.isRecallingForTheft = false
+            RUNTIME.recallTheftSince = 0
             if not RUNTIME.isGuardingHomeAtNight then
                 CFG.AutoFish = savedAutoFish
-                RUNTIME.lastCastAt = 0
+                resumeFishingAfterWarp(savedCF)
             end
         end
     end)
@@ -8297,29 +8367,35 @@ function Modules.updatePondGuardEngine(now)
                 RUNTIME.preGuardFishingCF = ((hrp.Position - homePos).Magnitude > 60) and hrp.CFrame or RUNTIME.lastFishingSpotCF
                 CFG.AutoFish = false
                 task.spawn(function()
-                    if Modules.recallAllRodsOnStop then Modules.recallAllRodsOnStop() end
-                    notify({
-                        Title = "🌙 เวลาเฝ้าบ้าน · กำลังเดินทางกลับบ้าน!",
-                        Content = "วางแผนเส้นทางข้ามโซนอัตโนมัติ (เรือ + มอเตอร์ไซค์/รถ A* หลบนา) กลับเฝ้าบ้าน",
-                        Duration = 5
-                    })
-                    local arrived = Modules.boatAutoTravelTo(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), "บ้านของฉัน")
-                    local curHrp = getMyHRP()
-                    local atHome = curHrp and (curHrp.Position - homePos).Magnitude <= 95.0
-                    if not atHome and curHrp then
-                        Modules.safeOverlandTravel(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), 22.0)
-                        curHrp = getMyHRP()
+                    local arrived, atHome = false, false
+                    pcall(function()
+                        if Modules.recallAllRodsOnStop then Modules.recallAllRodsOnStop() end
+                        notify({
+                            Title = "🌙 เวลาเฝ้าบ้าน · กำลังเดินทางกลับบ้าน!",
+                            Content = "วางแผนเส้นทางข้ามโซนอัตโนมัติ (เรือ + มอเตอร์ไซค์/รถ A* หลบนา) กลับเฝ้าบ้าน",
+                            Duration = 5
+                        })
+                        arrived = Modules.boatAutoTravelTo(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), "บ้านของฉัน")
+                        local curHrp = getMyHRP()
                         atHome = curHrp and (curHrp.Position - homePos).Magnitude <= 95.0
-                    end
+                        if not atHome and curHrp then
+                            Modules.safeOverlandTravel(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), 22.0)
+                            curHrp = getMyHRP()
+                            atHome = curHrp and (curHrp.Position - homePos).Magnitude <= 95.0
+                        end
+                    end)
                     RUNTIME.isReturningHomeForNight = false
                     if arrived or atHome then
                         RUNTIME.isGuardingHomeAtNight = true
-                        local g = resolvePondGeometry(myPlot)
-                        if g and g.guardStandCF then safeGlideTo(g.guardStandCF, 18.0) end
-                        Modules.ensureBatEquipped()
+                        pcall(function()
+                            local g = resolvePondGeometry(myPlot)
+                            if g and g.guardStandCF then safeGlideTo(g.guardStandCF, 18.0) end
+                            Modules.ensureBatEquipped()
+                        end)
                         notify({ Title = "🛡️ ถึงบ้านแล้ว · เฝ้าบ้านพร้อมตีโจร!", Content = "กำลังเฝ้าบ่อดินและตู้ปลาทุกใบในเขตบ้านจนถึง 05:35 น.", Duration = 4 })
                     else
                         RUNTIME.isGuardingHomeAtNight = false
+                        CFG.AutoFish = (RUNTIME.preGuardAutoFish ~= false)
                     end
                 end)
                 return
@@ -8327,38 +8403,40 @@ function Modules.updatePondGuardEngine(now)
         elseif isMorning and RUNTIME.isGuardingHomeAtNight then
             RUNTIME.isGuardingHomeAtNight = false
             task.spawn(function()
-                if CFG.AutoMorningCollect then
-                    local g = resolvePondGeometry(myPlot)
-                    if g and g.cashPos then
-                        safeGlideTo(CFrame.new(g.cashPos + Vector3.new(0, 1.5, 1.0)), 14.0)
-                        task.wait(0.2)
-                    end
-                    Input:FireServer("pondCash")
-                    if g and g.cashPrompt and typeof(fireproximityprompt) == "function" then
-                        pcall(fireproximityprompt, g.cashPrompt)
-                    end
-                    if CFG.AutoFeedPond then
-                        task.wait(0.3)
-                        Input:FireServer("feed", "pond")
-                        Input:FireServer("feedLive", "pond")
-                    end
-                    task.wait(0.4)
-                end
-
                 local backCF = RUNTIME.preGuardFishingCF or RUNTIME.lastFishingSpotCF
-                if backCF then
-                    notify({
-                        Title = "🌅 เช้าแล้ว! กลับหมายตกปลาเดิม",
-                        Content = "เก็บเงินบ่อเรียบร้อย กำลังเดินทางกลับจุดตกปลาเดิม...",
-                        Duration = 5
-                    })
-                    Modules.boatAutoTravelTo(backCF, "หมายตกปลาเดิม", { equipRod = true })
-                    if Modules.ensureSafeWaterFooting then
-                        Modules.ensureSafeWaterFooting(backCF)
+                pcall(function()
+                    if CFG.AutoMorningCollect then
+                        local g = resolvePondGeometry(myPlot)
+                        if g and g.cashPos then
+                            safeGlideTo(CFrame.new(g.cashPos + Vector3.new(0, 1.5, 1.0)), 14.0)
+                            task.wait(0.2)
+                        end
+                        Input:FireServer("pondCash")
+                        if g and g.cashPrompt and typeof(fireproximityprompt) == "function" then
+                            pcall(fireproximityprompt, g.cashPrompt)
+                        end
+                        if CFG.AutoFeedPond then
+                            task.wait(0.3)
+                            Input:FireServer("feed", "pond")
+                            Input:FireServer("feedLive", "pond")
+                        end
+                        task.wait(0.4)
                     end
-                end
+
+                    if backCF then
+                        notify({
+                            Title = "🌅 เช้าแล้ว! กลับหมายตกปลาเดิม",
+                            Content = "เก็บเงินบ่อเรียบร้อย กำลังเดินทางกลับจุดตกปลาเดิม...",
+                            Duration = 5
+                        })
+                        Modules.boatAutoTravelTo(backCF, "หมายตกปลาเดิม", { equipRod = true })
+                        if Modules.ensureSafeWaterFooting then
+                            Modules.ensureSafeWaterFooting(backCF)
+                        end
+                    end
+                end)
                 CFG.AutoFish = (RUNTIME.preGuardAutoFish ~= false)
-                RUNTIME.lastCastAt = 0
+                resumeFishingAfterWarp(backCF)
             end)
             return
         end
@@ -8536,7 +8614,15 @@ forceRecoverRod = function(reason)
 end
 
 function Modules.updateAntiStuckWatchdog(now)
-    if not CFG.AntiStuck or not CFG.AutoFish then return end
+    if not CFG.AntiStuck then return end
+    if RUNTIME.isRecallingForTheft and (RUNTIME.recallTheftSince or 0) > 0 and (now - RUNTIME.recallTheftSince) > 210 then
+        log("AntiStuck: Clearing stuck isRecallingForTheft (>210s)")
+        RUNTIME.isRecallingForTheft = false
+        RUNTIME.recallTheftSince = 0
+        RUNTIME.cancelTravelRequested = true
+        CFG.AutoFish = true
+    end
+    if not CFG.AutoFish then return end
 
     local busyLimit = math.max(75, getBusyTimeout(RUNTIME.busyMode) - 15)
     if isBusy() and RUNTIME.busySince > 0 and (now - RUNTIME.busySince) > busyLimit then
@@ -9325,7 +9411,7 @@ end
 task.spawn(function()
     while RUNTIME.alive do
         task.wait(2.5)
-        if LoyAsk and not isBusy() then
+        if LoyAsk and not isBusy() and not RUNTIME.isGuardingHomeAtNight and not RUNTIME.isReturningHomeForNight and not RUNTIME.isRecallingForTheft then
             local now = os.clock()
             local curPh = lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle"
 
@@ -11556,7 +11642,7 @@ end)
 syncGameLanguage()
 Fluent:SetTheme(InterfaceManager.Settings.Theme or "Amethyst")
 Window:SelectTab(1)
-notify({ Title = "ZeluxHub v5.1 โหลดสำเร็จ!", Content = "Precision Economy & Teleport Engine พร้อมใช้งาน", Duration = 5 })
+notify({ Title = "ZeluxHub v5.2 โหลดสำเร็จ!", Content = "Precision Economy & Teleport Engine พร้อมใช้งาน", Duration = 5 })
 pcall(function() SaveManager:LoadAutoloadConfig() end)
 local liveStartLure = getLiveGameLure()
 if liveStartLure then
