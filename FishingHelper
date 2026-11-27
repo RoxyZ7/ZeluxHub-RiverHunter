@@ -1,5 +1,5 @@
 --[[
-    River Hunter · HunterSuite v4.0 (Loy Krathong 2026 Event Master Edition)
+    River Hunter · HunterSuite v4.1 (27 Nov 2026 Update · Boat-Only Nav, Auto-O2, Home Defense & FPS Optimized)
     - Event Fish Fast-Path & Map System Exploit: Spatial Anchor Platform + Instant Ghostfang Intercept + Red Water Goliath Farm + Zone Spoofer
     - Full-System Economy Exploitation (Module 12): Cross-Plot Pond Fish Siphoning, Aerial Police Evasion, Dex Bounty Sweep, Remote Vendor Liquidation
     - Fix Fish Stall Sell (shop.far): Live prompt stand CFrame (-18.00, 6.50, 8.80) + server sync + 3x retry
@@ -56,7 +56,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
 local Window = Fluent:CreateWindow({
-    Title = "ZeluxHub v4.0",
+    Title = "ZeluxHub v4.1",
     SubTitle = "ZeluxHub-River Hunter · Precision Economy, Loy Krathong Event & Auto Suite",
     TabWidth = 165,
     Size = UDim2.fromOffset(620, 520),
@@ -181,6 +181,10 @@ function boatNav.extractNearLine(canGoFn)
 end
 
 function boatNav.makeSolidRayParams(boatModel, char)
+    local now = os.clock()
+    if boatNav._rpSolid and boatNav._rpBoat == boatModel and boatNav._rpChar == char and (now - (boatNav._rpAt or 0)) < 1.5 then
+        return boatNav._rpSolid
+    end
     local excl = {}
     if char then table.insert(excl, char) end
     if boatModel then table.insert(excl, boatModel) end
@@ -194,11 +198,12 @@ function boatNav.makeSolidRayParams(boatModel, char)
     local vis = (RUNTIME and RUNTIME.espFolder) or workspace:FindFirstChild("HunterSuite_Visuals")
     if vis then table.insert(excl, vis) end
 
-    local rp = RaycastParams.new()
+    local rp = boatNav._rpSolid or RaycastParams.new()
     rp.FilterDescendantsInstances = excl
     rp.FilterType = Enum.RaycastFilterType.Exclude
     rp.IgnoreWater = true
     rp.RespectCanCollide = true
+    boatNav._rpSolid, boatNav._rpBoat, boatNav._rpChar, boatNav._rpAt = rp, boatModel, char, now
     return rp
 end
 
@@ -306,195 +311,6 @@ function boatNav.isSegmentSafe(x1, z1, x2, z2, margin, rockPad)
     return true
 end
 
--- ====== Fast Travel Warp (Pass_warp) & Rider Buyer (Pass_rider) Suite ======
-local VALID_WARP_IDS = {
-    home = true,
-    plaza = true,
-    reservoir = true,
-    upstream = true,
-    mangrove = true,
-    river = true,
-}
-
-function boatNav.getWarpCooldownRemaining()
-    local readyAt = tonumber(lp:GetAttribute("WarpReady")) or 0
-    return math.max(0, readyAt - os.time())
-end
-
-function boatNav.canUseGamepassWarp(destId)
-    local perk = FishingRemotes and FishingRemotes:FindFirstChild("Perk")
-    if not perk then return false, "no_remote", 0 end
-    if lp:GetAttribute("Pass_warp") ~= true then return false, "no_pass", 0 end
-    if destId and not VALID_WARP_IDS[destId] then return false, "invalid_dest", 0 end
-    local rem = boatNav.getWarpCooldownRemaining()
-    if rem > 0 then return false, "cooldown", rem end
-    return true, "ok", 0
-end
-
-function boatNav.tryGamepassWarp(destId, verifyTimeout)
-    local ok, reason, rem = boatNav.canUseGamepassWarp(destId)
-    if not ok then
-        return false, reason, rem
-    end
-
-    local perk = FishingRemotes and FishingRemotes:FindFirstChild("Perk")
-    if not perk then return false, "no_remote", 0 end
-
-    local char = lp.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    local startPos = root and root.Position or Vector3.zero
-
-    pcall(function()
-        if sendReel then sendReel(0, true) end
-        if setSteer then setSteer(0, true) end
-        if Input then Input:FireServer("cancel") end
-    end)
-
-    perk:FireServer("warp", destId)
-
-    local t0 = os.clock()
-    local limit = verifyTimeout or 3.5
-    while RUNTIME.alive and (os.clock() - t0) < limit do
-        task.wait(0.15)
-        local curRoot = lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
-        if curRoot and (curRoot.Position - startPos).Magnitude > 25 then
-            return true, "warped", 0
-        end
-        if boatNav.getWarpCooldownRemaining() > 10 then
-            return true, "warped", 0
-        end
-    end
-
-    return false, "timeout", 0
-end
-
-function boatNav.mapTargetToWarpDest(targetCF, name)
-    if not targetCF then return nil end
-    local pos = typeof(targetCF) == "CFrame" and targetCF.Position or targetCF
-    local n = tostring(name or ""):lower()
-
-    if n:find("home") or n:find("plot") or n:find("บ่อส่วนตัว") or n:find("บ้าน") then
-        return "home"
-    end
-    if n:find("plaza") or n:find("market") or n:find("ร้าน") or n:find("ตลาด") or n:find("เคาน์เตอร์") or n:find("ลุงเบ็ด") or n:find("ป้าบัว") then
-        return "plaza"
-    end
-    if n:find("reservoir") or n:find("dam") or n:find("เขื่อน") or n:find("อ่างเก็บน้ำ") then
-        return "reservoir"
-    end
-    if n:find("upstream") or n:find("waterfall") or n:find("แก่งหิน") or n:find("น้ำตก") or n:find("ต้นน้ำ") then
-        return "upstream"
-    end
-    if n:find("mangrove") or n:find("swamp") or n:find("ป่าชายเลน") or n:find("ชายเลน") then
-        return "mangrove"
-    end
-    if n:find("river") or n:find("estuary") or n:find("แม่น้ำ") or n:find("ปากอ่าว") or n:find("หาด") then
-        return "river"
-    end
-
-    local sellStand = VENDOR_COORDINATES and VENDOR_COORDINATES.sell and VENDOR_COORDINATES.sell.stand or Vector3.new(-18, 8, 7.6)
-    if (pos - sellStand).Magnitude < 120 then
-        return "plaza"
-    end
-    if pos.Z <= -140 then
-        return "reservoir"
-    end
-    if pos.X <= -300 and pos.Z <= 500 then
-        if pos.Z <= 100 and pos.X <= -600 then
-            return "mangrove"
-        else
-            return "upstream"
-        end
-    end
-    if pos.Z >= 280 then
-        return "river"
-    end
-
-    return "plaza"
-end
-
-function boatNav.getRiderCooldownRemaining()
-    local backAt = tonumber(lp:GetAttribute("RiderBack")) or 0
-    return math.max(0, backAt - os.time())
-end
-
-function boatNav.canUseRiderSell()
-    local perk = FishingRemotes and FishingRemotes:FindFirstChild("Perk")
-    if not perk then return false, "no_remote", 0 end
-    if lp:GetAttribute("Pass_rider") ~= true then return false, "no_pass", 0 end
-    local rem = boatNav.getRiderCooldownRemaining()
-    if rem > 0 then return false, "cooldown", rem end
-    return true, "ok", 0
-end
-
-function boatNav.tryRiderSellAll(opts)
-    opts = opts or {}
-    local keepFav = (opts.keepFav ~= false)
-    local keepKingbuk = (opts.keepKingbuk == true)
-
-    local ok, reason, rem = boatNav.canUseRiderSell()
-    if not ok then
-        return false, reason, rem
-    end
-
-    local perk = FishingRemotes and FishingRemotes:FindFirstChild("Perk")
-    if not perk then return false, "no_remote", 0 end
-
-    local done = false
-    local soldCount = 0
-    local status = "timeout"
-    local conn
-
-    conn = perk.OnClientEvent:Connect(function(ev, list)
-        if ev == "riderHere" and typeof(list) == "table" then
-            local uids = {}
-            for _, fish in ipairs(list) do
-                if typeof(fish) == "table" and fish.uid ~= nil then
-                    local isFav = (fish.fav == true or fish.secret == true)
-                    local sp = tostring(fish.species or fish.id or fish.name or ""):lower()
-                    local isKingbuk = (sp:find("kingbuk") or sp:find("giant_catfish") or sp:find("บึกยักษ์") or sp:find("พญาบึก"))
-                    if not (keepFav and isFav) and not (keepKingbuk and isKingbuk) then
-                        table.insert(uids, fish.uid)
-                    end
-                end
-            end
-
-            if #uids > 0 then
-                perk:FireServer("riderSell", uids)
-                soldCount = #uids
-                status = "sold"
-            else
-                perk:FireServer("riderCancel")
-                status = "nothing_to_sell"
-            end
-            done = true
-        elseif ev == "riderGone" then
-            if not done then
-                status = "rider_gone"
-                done = true
-            end
-        end
-    end)
-
-    perk:FireServer("rider")
-
-    local t0 = os.clock()
-    local limit = opts.timeout or 12.0
-    while RUNTIME.alive and not done and (os.clock() - t0) < limit do
-        task.wait(0.10)
-    end
-
-    if conn then
-        conn:Disconnect()
-    end
-
-    if status == "sold" then
-        task.wait(0.40)
-        return true, status, soldCount
-    end
-    return false, status, soldCount
-end
-
 -- เช็คผิวน้ำจริงรอบตัวเรือ (WaterFX.boatWater + nearLine)
 function boatNav.isWaterNavigable(x, z, waterY, requireStreamedTerrain)
     local wy = waterY or boatNav.getWaterY(x, z)
@@ -593,13 +409,13 @@ do
         getgenv()._originalBoatPhysicsStep = originalBoatPhysicsStep
     end
 
-    -- เรดาร์พัด 11 แฉก ครอบคลุม -80 ถึง +80 องศา สแกนไกล 60 สตัด
+    -- เรดาร์พัด 7 แฉก ครอบคลุม -75 ถึง +75 องศา สแกนไกล 56 สตัด (ลด Raycast ~60% ลื่นขึ้นมาก)
     local RADAR_RADS = {
-        math.rad(-80), math.rad(-62), math.rad(-46), math.rad(-30), math.rad(-15),
+        math.rad(-75), math.rad(-48), math.rad(-24),
         0,
-        math.rad(15), math.rad(30), math.rad(46), math.rad(62), math.rad(80)
+        math.rad(24), math.rad(48), math.rad(75)
     }
-    local RADAR_DISTS = { 6, 12, 18, 25, 33, 42, 51, 60 }
+    local RADAR_DISTS = { 7, 15, 24, 34, 45, 56 }
 
     if BoatPhysics and typeof(BoatPhysics.step) == "function" and originalBoatPhysicsStep then
         BoatPhysics.step = function(st, ctrl, cfg, water, dt)
@@ -628,7 +444,7 @@ do
                 local vForward = (st.vx * fx) + (st.vz * fz)
                 local wy = RUNTIME.boatWaterY or 0
 
-                if (now - (RUNTIME.boatRadarAt or 0)) >= 0.08 or not RUNTIME.boatCachedCtrl then
+                if (now - (RUNTIME.boatRadarAt or 0)) >= 0.12 or not RUNTIME.boatCachedCtrl then
                     RUNTIME.boatRadarAt = now
                     local curX, curZ = st.x, st.z
                     local wp = RUNTIME.boatAutoTarget
@@ -640,19 +456,18 @@ do
                     else
                         local rpSolid = boatNav.makeSolidRayParams(boatModel, char)
                         local hullHalfLen = (boatModel and tonumber(boatModel:GetAttribute("BoatLen")) or 14) * 0.5
-                        local shoulderOff = 4.2 -- เผื่อกราบเรือซ้าย-ขวา กันเฉี่ยว BoatBlock และตอม่อ
+                        local shoulderOff = 4.2
                         local rayHeights = { wy + 1.20, wy + 0.65 }
                         local rawClear = {}
 
-                        for i = 1, 11 do
+                        for i = 1, 7 do
                             local rad = RADAR_RADS[i]
                             local ca, sa = math.cos(rad), math.sin(rad)
                             local dirX = fx * ca + rx * sa
                             local dirZ = fz * ca + rz * sa
                             local perpX, perpZ = -dirZ, dirX
-                            local maxClear = 60
+                            local maxClear = 56
 
-                            -- 1. จับ BoatBlock / DriftLog / Rock / Pier / RaftDeck (3 เส้นขนาน x 2 ความสูง)
                             for _, sOff in ipairs({ 0, -shoulderOff, shoulderOff }) do
                                 local ox = curX + perpX * sOff
                                 local oz = curZ + perpZ * sOff
@@ -666,7 +481,6 @@ do
                                 end
                             end
 
-                            -- 2. จับเกาะ สันทราย ตลิ่ง น้ำตื้น ด้วย WaterFX.boatWater + nearLine
                             for _, d in ipairs(RADAR_DISTS) do
                                 if d > maxClear then break end
                                 local px = curX + dirX * (d + hullHalfLen * 0.45)
@@ -683,50 +497,48 @@ do
                         end
 
                         local safeClear = {}
-                        for i = 1, 11 do
+                        for i = 1, 7 do
                             local lC = rawClear[i - 1] or rawClear[i]
                             local rC = rawClear[i + 1] or rawClear[i]
                             safeClear[i] = math.min(rawClear[i], lC + 9, rC + 9)
                         end
 
-                        local leftSum = rawClear[1] + rawClear[2] + rawClear[3] + rawClear[4] + rawClear[5]
-                        local rightSum = rawClear[7] + rawClear[8] + rawClear[9] + rawClear[10] + rawClear[11]
+                        local leftSum = rawClear[1] + rawClear[2] + rawClear[3]
+                        local rightSum = rawClear[5] + rawClear[6] + rawClear[7]
                         local sternX, sternZ = curX - fx * (hullHalfLen + 4), curZ - fz * (hullHalfLen + 4)
                         local sternClear = boatNav.isWaterNavigable(sternX, sternZ, wy, true)
                             and not boatNav.hitsSolidObstacle(Vector3.new(curX, wy + 1.2, curZ), Vector3.new(sternX, wy + 1.2, sternZ), rpSolid)
 
                         if (RUNTIME.boatReverseUntil or 0) > now then
-                            if (rawClear[6] >= 22 and (rawClear[5] >= 16 or rawClear[7] >= 16)) or not sternClear then
+                            if (rawClear[4] >= 22 and (rawClear[3] >= 16 or rawClear[5] >= 16)) or not sternClear then
                                 RUNTIME.boatReverseUntil = 0
                             end
-                        elseif rawClear[6] <= 6 and rawClear[5] <= 10 and rawClear[7] <= 10 and sternClear then
+                        elseif rawClear[4] <= 6 and rawClear[3] <= 10 and rawClear[5] <= 10 and sternClear then
                             RUNTIME.boatReverseUntil = now + 1.2
                             RUNTIME.boatWantYawSign = (rightSum >= leftSum) and -1 or 1
                         end
 
                         if (RUNTIME.boatReverseUntil or 0) > now then
                             local wantYaw = RUNTIME.boatWantYawSign or -1
-                            -- ชดเชยการกลับด้านพวงมาลัยตอนถอยหลังของ BoatPhysics (v9 = -1)
                             local steerCmd = (vForward >= 0) and (-wantYaw) or wantYaw
                             RUNTIME.boatCachedCtrl = { throttle = -0.85, steer = steerCmd }
                         else
                             local tx, tz = dx / distWp, dz / distWp
                             local targetAngle = math.atan2(tx * rx + tz * rz, tx * fx + tz * fz)
 
-                            if rawClear[6] >= 48 and safeClear[6] >= 40 and math.abs(targetAngle) <= math.rad(14) then
+                            if rawClear[4] >= 44 and safeClear[4] >= 36 and math.abs(targetAngle) <= math.rad(14) then
                                 RUNTIME.boatDodgeSide = nil
                                 RUNTIME.boatCachedCtrl = {
                                     throttle = 1.0,
                                     steer = math.clamp(targetAngle * 1.8, -1, 1)
                                 }
                             else
-                                local dodging = (rawClear[6] < 42)
-                                local bestIdx, bestScore = 6, -1e9
-                                for i = 1, 11 do
+                                local dodging = (rawClear[4] < 40)
+                                local bestIdx, bestScore = 4, -1e9
+                                for i = 1, 7 do
                                     local rad = RADAR_RADS[i]
                                     local angleDiff = math.abs(rad - targetAngle)
                                     local score = (safeClear[i] * 1.8) - (angleDiff * 18.0)
-                                    -- Hysteresis: จำฝั่งหลบเกาะ ไม่ให้หักซ้ายสลับขวาเข้ากลางเกาะ
                                     if dodging and RUNTIME.boatDodgeSide then
                                         if (RUNTIME.boatDodgeSide > 0 and rad > 0) or (RUNTIME.boatDodgeSide < 0 and rad < 0) then
                                             score = score + 14.0
@@ -746,9 +558,9 @@ do
 
                                 local steerVal = math.clamp(chosenRad * 1.5, -1, 1)
                                 local throttleVal = 1.0
-                                if safeClear[bestIdx] < 18 or rawClear[6] < 18 then
+                                if safeClear[bestIdx] < 18 or rawClear[4] < 18 then
                                     throttleVal = 0.35
-                                elseif rawClear[6] < 32 or math.abs(steerVal) > 0.65 then
+                                elseif rawClear[4] < 30 or math.abs(steerVal) > 0.65 then
                                     throttleVal = 0.60
                                 end
                                 RUNTIME.boatCachedCtrl = { throttle = throttleVal, steer = steerVal }
@@ -875,18 +687,13 @@ local CFG = {
     Language = "Thai",
     AutoFish = true, AutoEquipRod = true, AutoCast = true, AutoHook = true, AutoFight = true, AutoLand = true, ReelSoundVolume = 0.8,
     CastPower = 0.70, CastCooldown = 0.9, SelectedLure = initialLureId, HookWindowPct = 0.52, MaxTension = 0.65, TwitchInterval = 0.92,
-    AutoSell = true, AutoSellThreshold = 18, InstantRemoteSell = false, AutoSellOnFull = true,
+    AutoSell = true, AutoSellThreshold = 18, AutoSellOnFull = true,
     FastHookset = false, HooksetPreDelay = 0.08, DoubleStrike = true, ReactiveFightEngine = true, AntiSnapPulse = true,
     AdaptiveRetrieval = true, SnipeFishCues = true, SkipCastCover = true,
     FishCueESP = true, BossSpotESP = true, FishSchoolESP = true, CastTrajectory = true,
     AutoCruiseRoundTrip = true, AutoCruiseThreshold = 18,
     boatIsleMargin      = 9.0,
     boatRockPad         = 6.5,
-    useGamepassWarp     = true,
-    useRiderAutoSell    = true,
-    riderWaitMaxSec     = 25,
-    riderKeepFav        = true,
-    riderKeepKingbuk    = false,
     TeleportMode = "Boat", BoatCruiseSpeed = 32,
     AutoTank = true, AutoTankStars = 3, AutoTankMut = true,
     -- Auto-Star (ติดดาวปลาอัตโนมัติ ป้องกันขาย/ปล่อย)
@@ -897,10 +704,11 @@ local CFG = {
     AutoStarMinPrice = 0,
     AutoStarMinKg = 0,
     SellAllIncludeFavorites = false,
-    AutoRestockBait = true, RestockThreshold = 3,
+    AutoRestockBait = true, RestockThreshold = 3, RestockBuyCount = 5,
+    -- ระบบออกซิเจนถังปลา (Auto O2 Bottle)
+    AutoOxygen = true, OxygenSize = "big", AutoBuyOxygen = true, OxygenBuyCount = 3,
     SpotRotation = true, SnagCounter = true,
     AutoHopOnVoteKick = true, BossNotify = true, AntiAFK = true,
-    InstantTeleport = false,
     -- Modules 1-10
     CatchFilterEnabled = false, FilterMinStars = 1, FilterMinPrice = 0, DropNonMutated = false,
     AutoChum = false, ChumThreshold = 50,
@@ -917,6 +725,7 @@ local CFG = {
     AutoClaimBookRewards = false, AutoClaimDailyCash = true,
     -- Module 14: Pond Guard & Anti-Poach Engine (24/7 Earthen Pond Defense)
     PondGuard = false,
+    NightHomeDefense = false,
     AutoBeatThieves = true,
     AutoMorningCollect = true,
     AutoFeedPond = true,
@@ -1142,53 +951,6 @@ local function zeroVelocity(hrp)
     hrp.AssemblyAngularVelocity = Vector3.zero
 end
 
-local flashSafetyPad = nil
-local flashPadToken = 0
-
-local function ensureFlashPad(pos)
-    flashPadToken = flashPadToken + 1
-    if not (flashSafetyPad and flashSafetyPad.Parent) then
-        local p = Instance.new("Part")
-        p.Name = "HunterSuite_FlashPad"
-        p.Size = Vector3.new(24, 2, 24)
-        p.Anchored = true
-        p.CanCollide = true
-        p.Transparency = 1
-        p.Parent = workspace
-        flashSafetyPad = p
-    end
-    flashSafetyPad.CFrame = CFrame.new(pos.X, pos.Y - 4.0, pos.Z)
-    return flashSafetyPad, flashPadToken
-end
-
-local function clearFlashPad(delaySec, expectedToken)
-    local tokenNow = expectedToken or flashPadToken
-    if delaySec and delaySec > 0 then
-        task.delay(delaySec, function()
-            if flashPadToken == tokenNow and flashSafetyPad and flashSafetyPad.Parent then
-                pcall(function() flashSafetyPad:Destroy() end)
-                flashSafetyPad = nil
-            end
-        end)
-        return
-    end
-    if flashSafetyPad and flashSafetyPad.Parent then
-        pcall(function() flashSafetyPad:Destroy() end)
-    end
-    flashSafetyPad = nil
-end
-
-local function isGroundStreamedUnder(pos)
-    local rp = RaycastParams.new()
-    local excl = {}
-    if lp.Character then table.insert(excl, lp.Character) end
-    if flashSafetyPad then table.insert(excl, flashSafetyPad) end
-    rp.FilterDescendantsInstances = excl
-    rp.FilterType = Enum.RaycastFilterType.Exclude
-    rp.IgnoreWater = false
-    return workspace:Raycast(pos + Vector3.new(0, 8, 0), Vector3.new(0, -35, 0), rp) ~= nil
-end
-
 local function setAntiSeatLock(hum, locked)
     if not hum then return end
     pcall(function()
@@ -1272,194 +1034,42 @@ local function resumeFishingAfterWarp()
     end
 end
 
-local function flashWarpSynced(hrp, targetCF, settleSec, waitForGround)
-    if not (hrp and hrp.Parent) then return false end
-    local char = lp.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-
-    -- บล็อกการนั่ง + ทำลาย SeatWeld ให้ขาดก่อนวาร์ปทุกครั้ง
-    forceUnseat(hum, hrp)
-
-    local safeCF = targetCF + Vector3.new(0, 1.0, 0)
-    local dist = (hrp.Position - safeCF.Position).Magnitude
-    ensureFlashPad(safeCF.Position)
-    hrp.Anchored = false
-
-    local function snapOnce(offsetX)
-        if hum and (hum.Sit or hum.SeatPart ~= nil) then
-            forceUnseat(hum, hrp)
-        end
-        local cf = offsetX and (safeCF * CFrame.new(offsetX, 0, 0)) or safeCF
-        if char and char.PrimaryPart then
-            char:PivotTo(cf)
-        else
-            hrp.CFrame = cf
-        end
-        zeroVelocity(hrp)
+-- ตัวช่วยอ่านพิกัดอย่างปลอดภัย รองรับทั้ง BasePart, Model และ Folder (แก้บั๊ก GetPivot is not a valid member of Folder)
+function Modules.getSafeInstancePos(inst)
+    if not inst then return nil end
+    if inst:IsA("BasePart") then return inst.Position end
+    if inst:IsA("Model") then
+        local ok, cf = pcall(function() return inst:GetPivot() end)
+        if ok and cf then return cf.Position end
     end
-
-    snapOnce(0)
-    local holdFor = settleSec or (dist > 150 and 0.42 or 0.22)
-    local t0 = os.clock()
-    local nudge = 0.03
-    while RUNTIME.alive and hrp.Parent and (os.clock() - t0) < holdFor do
-        nudge = -nudge
-        snapOnce(nudge)
-        RunService.Heartbeat:Wait()
-    end
-
-    if waitForGround and dist > 100 then
-        local g0 = os.clock()
-        while RUNTIME.alive and hrp.Parent and (os.clock() - g0) < 3.5 do
-            if isGroundStreamedUnder(safeCF.Position) and (hrp.Position - safeCF.Position).Magnitude <= 12 then
-                break
-            end
-            snapOnce(0)
-            RunService.Heartbeat:Wait()
-        end
-    end
-
-    snapOnce(0)
-    return (hrp.Position - safeCF.Position).Magnitude <= 15
+    local part = inst:FindFirstChildWhichIsA("BasePart", true)
+    return part and part.Position or nil
 end
 
-local function returnToFishingSpot(originCF)
-    if not originCF then return false end
-    for _ = 1, 3 do
-        local hrp = getMyHRP()
-        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
-        if not hrp then
-            task.wait(0.25)
-        else
-            forceUnseat(hum, hrp)
-            local dist = (hrp.Position - originCF.Position).Magnitude
-            if dist <= 12 and isGroundStreamedUnder(originCF.Position) then
-                zeroVelocity(hrp)
-                return true
-            end
-            flashWarpSynced(hrp, originCF, dist > 120 and 0.45 or 0.18, true)
-            task.wait(0.18)
-            hrp = getMyHRP()
-            if hrp and (hrp.Position - originCF.Position).Magnitude <= 15 then
-                return true
-            end
+function Modules.getMyHomePos()
+    local myPlot = lp:GetAttribute("Plot")
+    if not myPlot then return nil end
+
+    local plots = workspace:FindFirstChild("Town") and workspace.Town:FindFirstChild("Plots")
+    local plotFolder = plots and (plots:FindFirstChild("Plot" .. tostring(myPlot)) or plots:FindFirstChild(tostring(myPlot)))
+    if plotFolder then
+        local shop = plotFolder:FindFirstChild("Shop")
+        local safeObj = shop and shop:FindFirstChild("Part_safe")
+        local pos = Modules.getSafeInstancePos(safeObj)
+            or Modules.getSafeInstancePos(shop)
+            or Modules.getSafeInstancePos(plotFolder)
+        if pos then return pos end
+    end
+
+    -- Fallback จากพิกัด TownPlan.plots[myPlot] (ใช้ได้ทันทีแม้ชังก์บ้านยังไม่สตรีมโหลด)
+    local tp = boatNav.TownPlan
+    if tp and typeof(tp.plots) == "table" then
+        local p = tp.plots[tonumber(myPlot)]
+        if p then
+            return Vector3.new(p.fx + (p.nx or 0) * 35, (tp.GROUND or 4) + 3.5, p.fz)
         end
     end
-    return false
-end
-
-local function isWaterUnderPosition(pos)
-    local rp = RaycastParams.new()
-    local excl = {}
-    if lp.Character then table.insert(excl, lp.Character) end
-    if flashSafetyPad then table.insert(excl, flashSafetyPad) end
-    if RUNTIME.eventPlatform then table.insert(excl, RUNTIME.eventPlatform) end
-    rp.FilterDescendantsInstances = excl
-    rp.FilterType = Enum.RaycastFilterType.Exclude
-    rp.IgnoreWater = false
-    local hit = workspace:Raycast(pos + Vector3.new(0, 8, 0), Vector3.new(0, -35, 0), rp)
-    return hit == nil or hit.Material == Enum.Material.Water
-end
-
--- ระบบวาร์ปปลอดภัยมาตรฐานเดียวกับระบบขายปลา (ไม่โดนเตะ Error 267, ไม่ติดเก้าอี้, ไม่ตกแมพ)
-local function safeWarpToCFrame(targetCF, opts)
-    opts = opts or {}
-    if typeof(targetCF) ~= "CFrame" then return false end
-
-    local ok, res = runExclusive(opts.mode or "teleport", function()
-        local hrp = getMyHRP()
-        if not hrp then return false end
-
-        -- 1. หยุดรอกและเก็บสายเบ็ดให้เข้า idle ก่อนเคลื่อนย้ายทุกครั้ง
-        sendReel(0, true)
-        setSteer(0, true)
-        local tWait = os.clock()
-        while (os.clock() - tWait) < 2.0 do
-            local curPh = lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle"
-            if curPh == "idle" then break end
-            if curPh == "lure" or curPh == "flight" or curPh == "pending" then
-                pcall(function() Input:FireServer("cancel") end)
-                task.wait(0.22)
-            elseif curPh == "fight" or curPh == "strike" or curPh == "landing" then
-                if opts.forceCancelFight then
-                    pcall(function() Input:FireServer("cancel") end)
-                    task.wait(0.22)
-                else
-                    return false
-                end
-            else
-                task.wait(0.12)
-            end
-        end
-
-        hrp = getMyHRP()
-        if not hrp then return false end
-        local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
-
-        -- 2. ปลดเก้าอี้/เรือ และล็อกห้ามนั่งระหว่างวาร์ป
-        if forceUnseat then forceUnseat(hum, hrp) end
-
-        -- 3. วาร์ปซิงค์พิกัด + วางแผ่นรองรับ + รอพื้นจริงสตรีมโหลด (เช็คซ้ำสูงสุด 3 รอบ)
-        local dist = (hrp.Position - targetCF.Position).Magnitude
-        local arrived = false
-        for _ = 1, 3 do
-            hrp = getMyHRP()
-            if not hrp then break end
-            arrived = flashWarpSynced(hrp, targetCF, dist > 120 and 0.45 or 0.22, true)
-            if arrived then break end
-            task.wait(0.15)
-        end
-
-        -- 4. ถ้าปลายทางเป็นผิวน้ำกลางแม่น้ำ (เช่น เวิ้งน้ำลึก) ให้เสกแท่นยืนรองรับทันที ไม่จมน้ำ
-        hrp = getMyHRP()
-        if hrp then
-            if isWaterUnderPosition(targetCF.Position) then
-                if Modules.ensureEventPlatform then
-                    Modules.ensureEventPlatform(targetCF.Position)
-                end
-            elseif Modules.destroyEventPlatform then
-                Modules.destroyEventPlatform()
-            end
-            hrp.Anchored = false
-            zeroVelocity(hrp)
-        end
-
-        -- 5. อัปเดตจุดตกปลาใหม่ (ถ้าไม่ได้วาร์ปเข้าตลาด) เพื่อไม่ให้ขายปลาเสร็จแล้วดีดกลับหมายเก่า
-        if (targetCF.Position - VENDOR_COORDINATES.sell.stand).Magnitude > 25.0 then
-            RUNTIME.lastFishingSpotCF = targetCF
-        end
-        RUNTIME.plantedStandCF = nil
-        RUNTIME.usingSecondaryHand = false
-        RUNTIME.phase = "idle"
-        syncClientPhase("idle")
-
-        clearFlashPad(2.0, flashPadToken)
-
-        -- ปลดล็อกการนั่งเรือ/ช้างคืนหลังยืนนิ่งบนจุดหมายแล้ว
-        if hum then
-            hum.PlatformStand = false
-            hum.WalkSpeed = 16
-            hum.JumpHeight = 7.2
-            hum.JumpPower = 50
-            task.delay(0.55, function()
-                if hum and hum.Parent and setAntiSeatLock then
-                    setAntiSeatLock(hum, false)
-                end
-            end)
-        end
-
-        return arrived
-    end)
-
-    if ok and res then
-        if opts.equipRod then
-            task.wait(0.10)
-            ensureRodEquipped()
-            RUNTIME.lastCastAt = 0
-        end
-        return true
-    end
-    return false
+    return nil
 end
 
 local function getRodTool()
@@ -1668,32 +1278,37 @@ end
 -- ====== Client State Table Caches ======
 local fightStateTable, tugStateTable, reelStateTable, rodStateTable
 
+local function getCachedStateTable(key, keysList)
+    RUNTIME._gcCd = RUNTIME._gcCd or {}
+    local now = os.clock()
+    if (RUNTIME._gcCd[key] or 0) > now then return nil end
+    RUNTIME._gcCd[key] = now + 3.0
+    local ok, t = pcall(filtergc, "table", { Keys = keysList }, false)
+    return (ok and t and #t > 0) and t[1] or nil
+end
+
 local function getFightStateTable()
     if fightStateTable ~= nil then return fightStateTable end
-    local t = filtergc("table", { Keys = { "sn", "sd", "ld" } }, false)
-    if #t > 0 then fightStateTable = t[1] return fightStateTable end
-    return nil
+    fightStateTable = getCachedStateTable("fight", { "sn", "sd", "ld" })
+    return fightStateTable
 end
 
 local function getTugStateTable()
     if tugStateTable ~= nil then return tugStateTable end
-    local t = filtergc("table", { Keys = { "bar", "bounce", "ppc" } }, false)
-    if #t > 0 then tugStateTable = t[1] return tugStateTable end
-    return nil
+    tugStateTable = getCachedStateTable("tug", { "bar", "bounce", "ppc" })
+    return tugStateTable
 end
 
 local function getReelStateTable()
     if reelStateTable ~= nil then return reelStateTable end
-    local t = filtergc("table", { Keys = { "holdReel", "reelSent" } }, false)
-    if #t > 0 then reelStateTable = t[1] return reelStateTable end
-    return nil
+    reelStateTable = getCachedStateTable("reel", { "holdReel", "reelSent" })
+    return reelStateTable
 end
 
 local function getRodStateTable()
     if rodStateTable ~= nil then return rodStateTable end
-    local t = filtergc("table", { Keys = { "tilt", "rodTwitch" } }, false)
-    if #t > 0 then rodStateTable = t[1] return rodStateTable end
-    return nil
+    rodStateTable = getCachedStateTable("rod", { "tilt", "rodTwitch" })
+    return rodStateTable
 end
 
 local localRodVisualCache = nil
@@ -2404,7 +2019,7 @@ local function buildSafeStandCFrame(targetPos, fallbackPreset)
 end
 
 local function safeSegmentedTeleport(targetCF)
-    return safeWarpToCFrame(targetCF, { mode = "teleport", equipRod = false })
+    return Modules.boatAutoTravelTo and Modules.boatAutoTravelTo(targetCF, "จุดหมาย") or false
 end
 
 local function safeGlideTo(targetCFrame, speed, maxDist, keepSeatUnlocked)
@@ -2888,7 +2503,7 @@ local function toggleGameUI(uiName, extraArg)
 end
 
 -- ====== Remote Shop, Safe & Sell Operations ======
--- ซื้อของร้านค้าทางไกล (ใช้ flashWarpSynced หากไกลเกิน 35 สตัด ไม่ติด distance_too_far)
+-- ซื้อของร้านค้าทางไกล (ใช้เรือล่องไปร้านอย่างปลอดภัยหากไกลเกิน 35 สตัด)
 local function remoteBuyItem(stallName, itemName, silent)
     local stall = stallName or "tackle"
     local hrp = getMyHRP()
@@ -3013,83 +2628,212 @@ local function getBaitCount(lureId)
     return tonumber(gear.baits[lureId]) or 0
 end
 
-local function buyBaitAtTackleShop(lureId)
+-- ====== ระบบออกซิเจนถังปลาอัตโนมัติ (O2 Bottle Manager · 27 Nov 2026) ======
+function Modules.getO2SpareCount(sizeId)
+    local raw = tostring(lp:GetAttribute("O2Spare") or "")
+    return tonumber(raw:match(tostring(sizeId) .. ":(%d+)")) or 0
+end
+
+function Modules.buyOxygenAtTackleShop(sizeId, buyCount)
+    sizeId = sizeId or CFG.OxygenSize or "big"
+    buyCount = math.clamp(tonumber(buyCount or CFG.OxygenBuyCount) or 3, 1, 20)
+
+    local ok, boughtN = runExclusive("restock_o2", function()
+        local hrp = getMyHRP()
+        if not hrp then return 0 end
+        local prevCF = hrp.CFrame
+        local preset = VENDOR_COORDINATES.tackle
+        local targetCF = CFrame.lookAt(preset.stand, preset.lookAt)
+        local dist = (prevCF.Position - preset.stand).Magnitude
+
+        if dist > 4.0 then
+            if not pilotBoatOrWalkRaw(targetCF, "ร้านลุงเบ็ด") then return 0 end
+        end
+
+        local prompt, livePos = findPromptForTarget("tackle")
+        local curHrp = getMyHRP()
+        if curHrp and livePos and (curHrp.Position - livePos).Magnitude > 6.0 then
+            safeGlideTo(buildSafeStandCFrame(livePos, preset), 14.0)
+        end
+        if prompt then pcall(fireproximityprompt, prompt); task.wait(0.12) end
+
+        local bought = 0
+        for _ = 1, buyCount do
+            local before = Modules.getO2SpareCount(sizeId)
+            Input:FireServer("shop", { stall = "tackle", item = "oxy:" .. sizeId })
+            local t0 = os.clock()
+            local got = false
+            while (os.clock() - t0) < 0.85 do
+                task.wait(0.06)
+                if Modules.getO2SpareCount(sizeId) > before then got = true; break end
+            end
+            if not got then break end -- เงินไม่พอหรือเต็ม 99 ขวด
+            bought = bought + 1
+            task.wait(0.12)
+        end
+
+        -- เปลี่ยนใส่ถังปลาทันทีถ้าขวดปัจจุบันใกล้หมด
+        if (tonumber(lp:GetAttribute("O2Charge")) or 0) <= 15 and Modules.getO2SpareCount(sizeId) > 0 then
+            Input:FireServer("o2Swap", sizeId)
+            task.wait(0.15)
+        end
+
+        pcall(function()
+            local ctrl = getUIController("StallUI")
+            if ctrl and ctrl.ui and ctrl.ui:isOpen() and not RUNTIME.activeRemoteUIs[ctrl] then ctrl.ui:close() end
+        end)
+
+        if dist > 4.0 and prevCF then
+            pilotBoatOrWalkRaw(prevCF, "จุดตกปลาเดิม")
+        end
+        ensureRodEquipped()
+        return bought
+    end)
+
+    resumeFishingAfterWarp()
+    return (ok and tonumber(boughtN) or 0)
+end
+
+function Modules.swapOxygenNow(preferredSize, silent)
+    local pref = preferredSize or CFG.OxygenSize or "big"
+    for _, sz in ipairs({ pref, "big", "mid", "small" }) do
+        if Modules.getO2SpareCount(sz) > 0 then
+            Input:FireServer("o2Swap", sz)
+            if not silent then
+                notify({
+                    Title = "🫧 เปลี่ยนขวดออกซิเจนแล้ว!",
+                    Content = string.format("ติดตั้งขวด %s (คงเหลือสำรอง %d ขวด)", sz, math.max(0, Modules.getO2SpareCount(sz) - 1)),
+                    Duration = 3
+                })
+            end
+            return true, sz
+        end
+    end
+    if not silent then
+        notify({ Title = "🫧 ไม่มีขวดออกซิเจนสำรอง", Content = "กรุณาซื้อที่ร้านลุงเบ็ดหรือเปิดระบบซื้ออัตโนมัติ", Duration = 3 })
+    end
+    return false, nil
+end
+
+function Modules.updateAutoOxygen(now)
+    if not CFG.AutoOxygen or isBusy() then return false end
+    if (now - (RUNTIME.lastO2CheckAt or 0)) < 4.0 then return false end
+    RUNTIME.lastO2CheckAt = now
+
+    -- เกมลดออกซิเจนเฉพาะตอนมีปลาอยู่ในถัง
+    if (lp:GetAttribute("BucketN") or 0) <= 0 then return false end
+
+    local charge = tonumber(lp:GetAttribute("O2Charge")) or 0
+    local cap = math.max(1, tonumber(lp:GetAttribute("O2Cap")) or 1)
+    if charge > 15 and (charge / cap) > 0.08 then return false end
+
+    local pref = CFG.OxygenSize or "big"
+    local swapped = Modules.swapOxygenNow(pref, false)
+    if swapped then
+        RUNTIME.lastO2CheckAt = now + 8.0
+        return true
+    end
+
+    if CFG.AutoBuyOxygen and (lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle") == "idle" then
+        if (now - (RUNTIME.lastO2BuyAt or 0)) >= 60.0 then
+            RUNTIME.lastO2BuyAt = now
+            local n = Modules.buyOxygenAtTackleShop(pref, CFG.OxygenBuyCount or 3)
+            if n > 0 then
+                notify({ Title = "🫧 ซื้อขวดออกซิเจนสำเร็จ!", Content = string.format("ซื้อขวด %s เพิ่ม %d ขวดและติดตั้งแล้ว", pref, n), Duration = 4 })
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- ====== ระบบซื้อเหยื่ออัตโนมัติ (แก้บัคติดลูปเดินไปมา + ซื้อได้หลายแพ็กต่อรอบ) ======
+local function buyBaitAtTackleShop(lureId, buyPacks)
+    buyPacks = math.clamp(tonumber(buyPacks or CFG.RestockBuyCount) or 5, 1, 20)
     local ls = lp:FindFirstChild("leaderstats")
     local coinsVal = ls and ls:FindFirstChild("เงิน")
-    local prevCoins = (coinsVal and tonumber(coinsVal.Value)) or 0
     local minPrice = (FishingConfig.LurePrices and tonumber(FishingConfig.LurePrices[lureId])) or 0
-    if minPrice > 0 and prevCoins < minPrice then return false end
+    if minPrice > 0 and ((coinsVal and tonumber(coinsVal.Value)) or 0) < minPrice then return 0 end
 
-    local ok, bought = runExclusive("restock", function()
+    local ok, boughtPacks = runExclusive("restock", function()
         local hrp = getMyHRP()
-        if not hrp then return false end
-        if (lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle") ~= "idle" then return false end
+        if not hrp then return 0 end
+        if (lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle") ~= "idle" then return 0 end
 
         local prevCF = hrp.CFrame
         local preset = VENDOR_COORDINATES.tackle
         local targetCF = CFrame.lookAt(preset.stand, preset.lookAt)
         local dist = (prevCF.Position - preset.stand).Magnitude
-        local prevCount = getBaitCount(lureId) or 0
-        local successBuy = false
 
-        pcall(function()
-            if dist > 3.0 then
-                pilotBoatOrWalkRaw(targetCF, "ร้านลุงเบ็ด")
-            end
+        if dist > 4.0 then
+            if not pilotBoatOrWalkRaw(targetCF, "ร้านลุงเบ็ด") then return 0 end
+        end
 
-            local prompt, livePos = findPromptForTarget("tackle")
-            if livePos and (hrp.Position - livePos).Magnitude > 6.0 then
-                safeGlideTo(buildSafeStandCFrame(livePos, preset), 14.0)
-            end
-            if prompt then
-                pcall(function() fireproximityprompt(prompt) end)
-                task.wait(0.10)
-            end
+        local prompt, livePos = findPromptForTarget("tackle")
+        local curHrp = getMyHRP()
+        if curHrp and livePos and (curHrp.Position - livePos).Magnitude > 6.0 then
+            safeGlideTo(buildSafeStandCFrame(livePos, preset), 14.0)
+        end
+        if prompt then
+            pcall(function() fireproximityprompt(prompt) end)
+            task.wait(0.12)
+        end
 
-            local lureCfg = FishingConfig.Lures and FishingConfig.Lures[lureId]
-            local baitKey = lureCfg and lureCfg.Bait
-            local candidates = {}
-            if baitKey then
-                table.insert(candidates, "bait:" .. baitKey)
-                if baitKey ~= lureId then table.insert(candidates, "bait:" .. lureId) end
-                table.insert(candidates, "lure:" .. lureId)
-            else
-                table.insert(candidates, "lure:" .. lureId)
-                table.insert(candidates, "bait:" .. lureId)
-            end
+        local lureCfg = FishingConfig.Lures and FishingConfig.Lures[lureId]
+        local baitKey = lureCfg and lureCfg.Bait
+        local candidates = {}
+        if baitKey then
+            table.insert(candidates, "bait:" .. baitKey)
+            if baitKey ~= lureId then table.insert(candidates, "bait:" .. lureId) end
+            table.insert(candidates, "lure:" .. lureId)
+        else
+            table.insert(candidates, "lure:" .. lureId)
+            table.insert(candidates, "bait:" .. lureId)
+        end
 
-            for _, itemId in ipairs(candidates) do
+        local workingItem = nil
+        local bought = 0
+        for _ = 1, buyPacks do
+            local prevCount = getBaitCount(lureId) or 0
+            local prevCoins = (coinsVal and tonumber(coinsVal.Value)) or 0
+            local packOk = false
+            local tryList = workingItem and { workingItem } or candidates
+
+            for _, itemId in ipairs(tryList) do
                 Input:FireServer("shop", { stall = "tackle", item = itemId })
                 local t0 = os.clock()
-                while (os.clock() - t0) < 0.75 do
+                while (os.clock() - t0) < 0.85 do
                     task.wait(0.06)
                     local curCount = getBaitCount(lureId) or prevCount
                     local curCoins = (coinsVal and tonumber(coinsVal.Value)) or prevCoins
                     if curCount > prevCount or curCoins < prevCoins then
-                        successBuy = true
+                        workingItem = itemId
+                        packOk = true
                         break
                     end
                 end
-                if successBuy then break end
+                if packOk then break end
             end
 
-            pcall(function()
-                local ctrl = getUIController("StallUI")
-                if ctrl and ctrl.ui and ctrl.ui:isOpen() and not RUNTIME.activeRemoteUIs[ctrl] then ctrl.ui:close() end
-            end)
+            if not packOk then break end -- เงินไม่พอหรือเหยื่อเต็มกล่องแล้ว -> หยุดทันทีไม่วนซ้ำ
+            bought = bought + 1
+            task.wait(0.12)
+        end
 
-            if dist > 3.0 and prevCF then
-                pilotBoatOrWalkRaw(prevCF, "จุดตกปลาเดิม")
-            end
+        pcall(function()
+            local ctrl = getUIController("StallUI")
+            if ctrl and ctrl.ui and ctrl.ui:isOpen() and not RUNTIME.activeRemoteUIs[ctrl] then ctrl.ui:close() end
         end)
 
+        if dist > 4.0 and prevCF then
+            pilotBoatOrWalkRaw(prevCF, "จุดตกปลาเดิม")
+        end
         ensureRodEquipped()
-        return successBuy
+        return bought
     end)
 
     resumeFishingAfterWarp()
-
-    return ok and bought == true
+    return (ok and tonumber(boughtPacks) or 0)
 end
 
 local function checkAutoRestockBait()
@@ -3098,7 +2842,7 @@ local function checkAutoRestockBait()
     if (lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle") ~= "idle" then return false end
 
     local now = os.clock()
-    if (now - (RUNTIME.lastRestockCheckAt or 0)) < 10.0 then return false end
+    if (now - (RUNTIME.lastRestockCheckAt or 0)) < 12.0 then return false end
     RUNTIME.lastRestockCheckAt = now
     RUNTIME.lastRestockByLure = RUNTIME.lastRestockByLure or {}
 
@@ -3120,6 +2864,7 @@ local function checkAutoRestockBait()
     end
 
     local threshold = tonumber(CFG.RestockThreshold) or 3
+    local buyPacks = math.clamp(tonumber(CFG.RestockBuyCount) or 5, 1, 20)
     for _, lureId in ipairs(luresToCheck) do
         if not NON_TACKLE_BAITS[lureId] and not (lureId == "chunk" and workspace:GetAttribute("InvOn") ~= true) then
             local count = getBaitCount(lureId)
@@ -3135,28 +2880,28 @@ local function checkAutoRestockBait()
                             local ls = lp:FindFirstChild("leaderstats")
                             local coins = (ls and ls:FindFirstChild("เงิน") and ls["เงิน"].Value) or 0
                             if coins >= 300 then
-                                local okBuy = Modules.buyKrathongBait()
-                                RUNTIME.lastRestockByLure[lureId] = os.clock() + (okBuy and 12.0 or 45.0)
+                                local okBuy = Modules.buyKrathongBait(buyPacks)
+                                RUNTIME.lastRestockByLure[lureId] = os.clock() + (okBuy and 45.0 or 90.0)
                                 if okBuy then
                                     RUNTIME.lastLoyBaitBuyAt = os.clock()
                                     RUNTIME.lastCastAt = 0
                                     return true
                                 end
                             else
-                                RUNTIME.lastRestockByLure[lureId] = now + 30.0
+                                RUNTIME.lastRestockByLure[lureId] = now + 45.0
                             end
                         end
                     elseif CFG.AutoRestockBait then
-                        local okBuy = buyBaitAtTackleShop(lureId)
-                        -- ถ้าซื้อไม่ผ่าน (เช่น เหยื่อเต็มกล่อง/ร้านไม่ขาย) พัก 60 วิ ไม่วาร์ปวน
-                        RUNTIME.lastRestockByLure[lureId] = os.clock() + (okBuy and 12.0 or 60.0)
-                        if okBuy then
+                        local bought = buyBaitAtTackleShop(lureId, buyPacks)
+                        -- พักคูลดาวน์หลังซื้อ (45 วิถ้าซื้อผ่าน / 90 วิถ้าซื้อไม่ได้ เช่น เหยื่อเต็มกล่อง) กันลูปเดินไปมาเด็ดขาด
+                        RUNTIME.lastRestockByLure[lureId] = os.clock() + (bought > 0 and 45.0 or 90.0)
+                        if bought > 0 then
                             RUNTIME.lastRestockAt = os.clock()
                             RUNTIME.lastCastAt = 0
                             notify({
                                 Title = "🪱 เติมเหยื่ออัตโนมัติสำเร็จ!",
-                                Content = string.format("ซื้อ %s เพิ่มแล้ว (คงเหลือ: %s)", LURE_DISPLAY_BY_ID[lureId] or lureId, tostring(getBaitCount(lureId) or "?")),
-                                Duration = 3
+                                Content = string.format("ซื้อ %s เพิ่ม %d แพ็ก (คงเหลือ: %s)", LURE_DISPLAY_BY_ID[lureId] or lureId, bought, tostring(getBaitCount(lureId) or "?")),
+                                Duration = 3.5
                             })
                             return true
                         end
@@ -3237,18 +2982,22 @@ local function remoteSellAll(isManual)
         return false
     end
 
-    -- จำพิกัดจุดตกปลาไว้ก่อนทำอย่างอื่น (ถ้าตัวละครยืนไกลตลาด > 25 สตัด)
     local startHrp = getMyHRP()
     local sellStand = VENDOR_COORDINATES.sell.stand
-    local originCF = nil
-    if startHrp and (startHrp.Position - sellStand).Magnitude > 25.0 then
-        originCF = startHrp.CFrame
-        RUNTIME.lastFishingSpotCF = originCF
-    else
-        originCF = RUNTIME.lastFishingSpotCF or (startHrp and startHrp.CFrame)
+    local distToStall = startHrp and (startHrp.Position - sellStand).Magnitude or 999
+
+    -- ถ้ายืนไกลตลาด > 45 สตัด ให้ใช้เรือล่องไปขายแล้วกลับหมายเดิมแทนการวาร์ปทั้งหมด
+    if distToStall > 45.0 then
+        local ownedBoats = tostring(lp:GetAttribute("Boats") or "")
+        if ownedBoats ~= "" and ownedBoats ~= "none" and Modules.executeBoatMarketRoundTrip then
+            return Modules.executeBoatMarketRoundTrip()
+        end
     end
 
-    -- แลกปลาอีเวนต์เฉพาะเมื่อมีปลาอีเวนต์ (kt_*) จริง
+    if startHrp and distToStall > 25.0 then
+        RUNTIME.lastFishingSpotCF = startHrp.CFrame
+    end
+
     if CFG.AutoTradeKrathongFish and hasLoyEventFishInBucket() and Modules.tradeLoyFish and not isBusy() then
         pcall(Modules.tradeLoyFish, true)
         task.wait(0.15)
@@ -3266,7 +3015,6 @@ local function remoteSellAll(isManual)
         local prevCount = lp:GetAttribute("BucketN") or 0
         if prevCount == 0 and RUNTIME.pending == nil then return false end
 
-        -- เก็บสายให้กลับเข้า idle ก่อนวาร์ปไปขาย
         local startWait = os.clock()
         while (os.clock() - startWait) < 2.4 do
             local curPh = lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle"
@@ -3285,109 +3033,13 @@ local function remoteSellAll(isManual)
         end
 
         local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
-        if hum then
-            forceUnseat(hum, hrp)
-        end
+        if hum then forceUnseat(hum, hrp) end
 
         local sold = false
-        local returnCF = originCF or hrp.CFrame
-        local lookAtPos = VENDOR_COORDINATES.sell.lookAt
-        local targetCF = CFrame.lookAt(sellStand, lookAtPos)
-        local distToStall = (returnCF.Position - sellStand).Magnitude
-
-        local useFlash = (CFG.InstantRemoteSell ~= false) or (isManual == true and distToStall > 45.0)
-        if (not useFlash) and distToStall > 45.0 then
-            return false
-        end
-
-        if useFlash then
-            local needTeleport = distToStall > 2.5
-            pcall(function()
-                if needTeleport then
-                    flashWarpSynced(hrp, targetCF, distToStall > 120 and 0.48 or 0.24, false)
-                end
-
-                for _ = 1, 3 do
-                    local prompt, livePos = findPromptForTarget("sell")
-                    if livePos and (Vector3.new(hrp.Position.X - livePos.X, 0, hrp.Position.Z - livePos.Z)).Magnitude > 4.5 then
-                        local liveCF = buildSafeStandCFrame(livePos, VENDOR_COORDINATES.sell)
-                        if liveCF then flashWarpSynced(hrp, liveCF, 0.22, false) end
-                    end
-
-                    if prompt then
-                        pcall(function()
-                            local oldHold = prompt.HoldDuration
-                            prompt.HoldDuration = 0
-                            if typeof(fireproximityprompt) == "function" then
-                                fireproximityprompt(prompt)
-                            elseif prompt.InputHoldBegin and prompt.InputHoldEnd then
-                                prompt:InputHoldBegin()
-                                task.wait(0.02)
-                                prompt:InputHoldEnd()
-                            end
-                            prompt.HoldDuration = oldHold
-                        end)
-                        task.wait(0.15)
-                    end
-
-                    -- ยิงขายทั้งหมดตามระบบเกม (เซิร์ฟเวอร์ข้ามปลาติดดาวให้เองโดยอัตโนมัติ)
-                    pcall(function() Input:FireServer("sell", { all = true }) end)
-
-                    local t0 = os.clock()
-                    while (os.clock() - t0) < 1.35 do
-                        task.wait(0.06)
-                        local curCoins = (leaderstats and leaderstats:FindFirstChild("เงิน") and leaderstats["เงิน"].Value) or 0
-                        local curCount = lp:GetAttribute("BucketN") or 0
-                        if curCoins > prevCoins or (prevCount > 0 and curCount < prevCount) then
-                            sold = true
-                            break
-                        end
-                    end
-
-                    if sold then break end
-                    if needTeleport then
-                        flashWarpSynced(hrp, targetCF, 0.28, false)
-                    end
-                end
-
-                -- ถ้าถังมีที่ว่างแล้ว เก็บปลา pending ตัวล่าสุดเข้าถัง
-                local capNow = getBucketCap()
-                local afterN = lp:GetAttribute("BucketN") or 0
-                if RUNTIME.pending ~= nil and afterN < capNow then
-                    pcall(function() Input:FireServer("keepNew") end)
-                    task.wait(0.15)
-                    RUNTIME.pending = nil
-                end
-
-                pcall(function()
-                    local ctrl = getUIController("FishStall") or getUIController("StallUI")
-                    if ctrl and ctrl.ui and ctrl.ui:isOpen() and not RUNTIME.activeRemoteUIs[ctrl] then
-                        ctrl.ui:close()
-                    end
-                end)
-            end)
-
-            -- วาร์ปกลับจุดตกปลาเดิมพร้อมรอพื้นโหลดเสร็จ (เช็คซ้ำ 3 รอบ)
-            if needTeleport and returnCF then
-                returnToFishingSpot(returnCF)
-            end
-
-            clearFlashPad(2.0, flashPadToken)
-            local backHrp = getMyHRP()
-            if backHrp and backHrp.Parent then
-                backHrp.Anchored = false
-                zeroVelocity(backHrp)
-            end
-            if needTeleport then
-                task.wait(0.12)
-                ensureRodEquipped()
-            end
-        else
-            withProximityBridge("sell", function(prompt)
-                sold = performSellAtStall(prompt)
-                return sold
-            end, { allowDuringFight = false, firePrompt = true, postWait = 0.20, maxDist = 1.8, maxAllowedDist = 45.0, glideSpeed = 14.0 })
-        end
+        withProximityBridge("sell", function(prompt)
+            sold = performSellAtStall(prompt)
+            return sold
+        end, { allowDuringFight = false, firePrompt = true, postWait = 0.20, maxDist = 1.8, maxAllowedDist = 55.0, glideSpeed = 14.0 })
 
         Input:FireServer("bucket")
         if CFG.AutoBottom2Rods and Modules.getClientRuntimeTable then
@@ -3410,7 +3062,6 @@ local function remoteSellAll(isManual)
             })
             return true
         else
-            -- ถ้าขายแล้วจำนวนปลาไม่ลด (เช่น เหลือแต่ปลาที่เกมไม่ให้ขาย) พักไว้ 20 วิไม่ให้วาร์ปวน
             RUNTIME.lastSellAttemptAt = os.clock()
             RUNTIME.noChangeSellCount = freshCount
             RUNTIME.noChangePauseUntil = os.clock() + 20.0
@@ -3456,70 +3107,26 @@ checkAutoSell = function()
     local shouldSellOnThreshold = CFG.AutoSell and (bucketCount >= effectiveThreshold)
     if not (shouldSellOnFull or shouldSellOnThreshold) then return false end
 
-    -- กันวาร์ปวนกรณีปลาในถังไม่ลดลงจากรอบก่อน (จะกลับมาเช็คใหม่เมื่อได้ปลาเพิ่มหรือครบ 20 วิ)
     if RUNTIME.noChangeSellCount and bucketCount <= RUNTIME.noChangeSellCount and now < (RUNTIME.noChangePauseUntil or 0) then
         return false
     end
     if (now - (RUNTIME.lastSellAttemptAt or 0)) < 4.0 then return false end
 
-        -- 0. ระบบขายปลาผ่านไรเดอร์ทุกที่ (Pass_rider)
-    if CFG.useRiderAutoSell then
-        local riderReady, riderReason, riderRem = boatNav.canUseRiderSell()
-        if riderReady then
-            local soldOk, soldStatus, count = boatNav.tryRiderSellAll({
-                keepFav = (CFG.riderKeepFav ~= false),
-                keepKingbuk = (CFG.riderKeepKingbuk == true),
-                timeout = 10.0
-            })
-            if soldOk then
-                RUNTIME.lastSellAttemptAt = now
-                RUNTIME.noChangeSellCount = nil
-                RUNTIME.noChangePauseUntil = 0
-                notify({
-                    Title = "🛵 ไรเดอร์รับซื้อปลาสำเร็จ!",
-                    Content = string.format("ขายปลาผ่านไรเดอร์เรียบร้อย %d ตัว (หัก 10%%) ตกปลาต่อทันที", count),
-                    Duration = 4
-                })
-                return true
-            elseif soldStatus == "nothing_to_sell" then
-                RUNTIME.noChangeSellCount = bucketCount
-                RUNTIME.noChangePauseUntil = now + 40.0
-                notify({
-                    Title = "⭐ ถังเต็มด้วยปลาติดดาว/ปลาที่ตั้งเก็บ",
-                    Content = "ไม่มีปลาทั่วไปให้ไรเดอร์ขาย พักการขายชั่วคราว",
-                    Duration = 4
-                })
-                return false
-            end
-        elseif riderReason == "cooldown" and riderRem > 0 and riderRem <= (CFG.riderWaitMaxSec or 25) then
-            notify({
-                Title = "⏳ รอไรเดอร์เดินทางกลับ",
-                Content = string.format("รอไรเดอร์คูลดาวน์อีก %d วินาทีเพื่อขายที่จุดเดิม", math.ceil(riderRem)),
-                Duration = 3
-            })
-            task.wait(riderRem + 0.5)
-            return checkAutoSell()
-        end
-    end
-
-local ownedBoats = lp:GetAttribute("Boats") or ""
+    local ownedBoats = tostring(lp:GetAttribute("Boats") or "")
     local distToMarket = (hrp.Position - VENDOR_COORDINATES.sell.stand).Magnitude
 
-    if CFG.AutoCruiseRoundTrip and ownedBoats ~= "" and ownedBoats ~= "none" and distToMarket > 35.0 then
-        local cruiseThreshold = math.min(CFG.AutoSellThreshold or 18, CFG.AutoCruiseThreshold or 18, cap)
-        if (isFull or bucketCount >= cruiseThreshold) and (now - (RUNTIME.lastCruiseAttemptAt or 0)) >= 20 then
-            RUNTIME.lastCruiseAttemptAt = now
-            return Modules.executeBoatMarketRoundTrip()
-        end
-        return false
-    end
-
-    if CFG.InstantRemoteSell == false and distToMarket > 45.0 then
-        if isFull and (now - (RUNTIME.lastFullNotifyAt or 0)) > 25 then
+    if distToMarket > 45.0 then
+        if ownedBoats ~= "" and ownedBoats ~= "none" then
+            local cruiseThreshold = math.min(CFG.AutoSellThreshold or 18, CFG.AutoCruiseThreshold or 18, cap)
+            if (isFull or bucketCount >= cruiseThreshold) and (now - (RUNTIME.lastCruiseAttemptAt or 0)) >= 20 then
+                RUNTIME.lastCruiseAttemptAt = now
+                return Modules.executeBoatMarketRoundTrip()
+            end
+        elseif isFull and (now - (RUNTIME.lastFullNotifyAt or 0)) > 25 then
             RUNTIME.lastFullNotifyAt = now
             notify({
-                Title = "⚠️ ถังปลาเต็มแล้ว!",
-                Content = string.format("ปลาเต็มถัง (%d/%d) เลือกโหมด '⚡ Instant Micro-Flash' เพื่อขายด่วนทันที", bucketCount, cap),
+                Title = "⚠️ ถังปลาเต็ม (ยังไม่มีเรือ)",
+                Content = string.format("ปลาเต็มถัง (%d/%d) กรุณาซื้อเรือที่ท่าเรือเพื่อใช้ระบบล่องเรือขายปลาอัตโนมัติ", bucketCount, cap),
                 Duration = 5
             })
         end
@@ -4220,8 +3827,7 @@ local function stepFastTug()
     end
 end
 
--- วิ่งคู่ทั้ง RenderStepped + Heartbeat เพื่อลดการปัดเศษเฟรมที่ 60 FPS (ได้ ~13.2 CPS แทน 10-12 CPS)
-table.insert(RUNTIME.connections, RunService.RenderStepped:Connect(stepFastTug))
+-- ใช้ Heartbeat เพียงเส้นเดียวเพื่อลดภาระ CPU/FPS (ยังคงตอบสนองดึงสู้เต็มสปีด 13+ CPS)
 table.insert(RUNTIME.connections, RunService.Heartbeat:Connect(stepFastTug))
 
 local function updateFightStateMachine(now, d, ph, timers)
@@ -4484,8 +4090,8 @@ table.insert(RUNTIME.connections, State.OnClientEvent:Connect(function(ev, d)
             if RUNTIME.awaitingCatchFilter then
                 RUNTIME.awaitingCatchFilter = false
                 -- ติดดาวปลาตัวแรร์/บอส/กลายพันธุ์ก่อน เพื่อป้องกัน Auto-Drop ปล่อยทิ้ง
-                if CFG.AutoStar and Modules.autoStarBucketFish then
-                    pcall(Modules.autoStarBucketFish)
+                if CFG.AutoStar and Modules.sweepAutoStarBucket then
+                    pcall(Modules.sweepAutoStarBucket, false)
                 end
                 local dropped = Modules.evaluateCatchFilter and Modules.evaluateCatchFilter(RUNTIME.lastCatchData, false)
                 if not dropped then task.delay(0.35, checkAutoSell) end
@@ -4652,9 +4258,12 @@ table.insert(RUNTIME.connections, RunService.RenderStepped:Connect(function()
         arcBeam.Enabled, arcRing.Visible = false, false
     end
 
-    if Modules.renderFishCueRadar then Modules.renderFishCueRadar(now, p) end
-    if Modules.renderBossAndHotspotESP then Modules.renderBossAndHotspotESP(now, p) end
-    if Modules.renderFishSchoolRadar then Modules.renderFishSchoolRadar(now, p) end
+    if (now - (RUNTIME.lastEspRenderAt or 0)) >= 0.05 then
+        RUNTIME.lastEspRenderAt = now
+        if Modules.renderFishCueRadar then Modules.renderFishCueRadar(now, p) end
+        if Modules.renderBossAndHotspotESP then Modules.renderBossAndHotspotESP(now, p) end
+        if Modules.renderFishSchoolRadar then Modules.renderFishSchoolRadar(now, p) end
+    end
 end))
 
 -- ====== Main Autonomous Loops ======
@@ -5154,38 +4763,46 @@ function Modules.initModule3()
 }
 
 local function findOwnedBoatModel()
-    local myPos = (getMyHRP() and getMyHRP().Position) or Vector3.zero
-    local bestSeat, bestModel, bestDist = nil, nil, math.huge
     local myUserId = tostring(lp.UserId)
+    local boats = workspace:FindFirstChild("Boats")
+    if not boats then return nil, nil end
 
-    if workspace:FindFirstChild("Boats") then
-        local myBoat = workspace.Boats:FindFirstChild("Boat_" .. myUserId)
-        if myBoat then
-            local seat = myBoat:FindFirstChild("DriverSeat") or myBoat:FindFirstChildWhichIsA("VehicleSeat", true) or myBoat:FindFirstChildWhichIsA("Seat", true)
-            if seat then return myBoat, seat end
-        end
-        for _, b in ipairs(workspace.Boats:GetChildren()) do
+    -- ล็อกเฉพาะเรือของตัวเอง + เฉพาะ DriverSeat เท่านั้น (ไม่จับ PassengerSeat หัวเรือ)
+    local myBoat = boats:FindFirstChild("Boat_" .. myUserId)
+    if not myBoat then
+        for _, b in ipairs(boats:GetChildren()) do
             local owner = b:GetAttribute("Owner") or b:GetAttribute("OwnerId") or b:GetAttribute("Player")
             if tostring(owner) == myUserId or tostring(owner) == lp.Name or b.Name:find(myUserId, 1, true) then
-                local seat = b:FindFirstChild("DriverSeat") or b:FindFirstChildWhichIsA("VehicleSeat", true) or b:FindFirstChildWhichIsA("Seat", true)
-                if seat then return b, seat end
+                myBoat = b
+                break
             end
         end
     end
+    if not myBoat then return nil, nil end
 
-    -- Scoped search inside workspace.Boats and nearby vehicle seats without workspace:GetDescendants()
-    if workspace:FindFirstChild("Boats") then
-        for _, b in ipairs(workspace.Boats:GetChildren()) do
-            local seat = b:FindFirstChildWhichIsA("VehicleSeat", true) or b:FindFirstChildWhichIsA("Seat", true)
-            if seat and not seat.Occupant then
-                local dist = (seat.Position - myPos).Magnitude
-                if dist < bestDist and dist < 120 then
-                    bestDist, bestSeat, bestModel = dist, seat, b
+    local driverSeat = myBoat:FindFirstChild("DriverSeat")
+    if driverSeat and driverSeat:IsA("Seat") then
+        return myBoat, driverSeat
+    end
+    return myBoat, nil
+end
+
+local function findDriverSeatPrompt(boatModel, driverSeat)
+    if driverSeat then
+        local pr = driverSeat:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pr then return pr end
+    end
+    if boatModel then
+        for _, d in ipairs(boatModel:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                local act = (d.ActionText or ""):lower()
+                if d.Parent == driverSeat or act:find("ขับ") or act:find("drive") then
+                    return d
                 end
             end
         end
     end
-    return bestModel, bestSeat
+    return nil
 end
 
 local function triggerGarageSpawn(preferredBoat)
@@ -5228,42 +4845,72 @@ end
 local function boardBoatSafely(seat, hum)
     if not (seat and seat.Parent and hum) then return false end
     local boatModel = seat.Parent
-    local hull = getBoatHullPart(boatModel, seat)
+    local driverSeat = boatModel:FindFirstChild("DriverSeat") or seat
+    if driverSeat.Name ~= "DriverSeat" then return false end
+    local hull = getBoatHullPart(boatModel, driverSeat)
 
     -- เก็บคันเบ็ดทันที (กัน holdingRod() สั่งเบรกเรือ)
     pcall(function() hum:UnequipTools() end)
     if setAntiSeatLock then setAntiSeatLock(hum, false) end
 
-    if not (hum.Sit and hum.SeatPart == seat) then
-        safeGlideTo(CFrame.new(seat.Position + Vector3.new(0, 1.5, 0)), 14.0, nil, true)
+    -- ถ้าเผลอไปนั่งที่นั่งคนนั่งข้างหน้า (PassengerSeat) ให้ลุกทันที!
+    if hum.Sit and hum.SeatPart and hum.SeatPart ~= driverSeat then
+        hum.Jump = true
+        hum.Sit = false
+        local w = hum.SeatPart:FindFirstChild("SeatWeld")
+        if w then pcall(function() w:Destroy() end) end
+        task.wait(0.22)
+    end
+
+    for _ = 1, 4 do
+        if hum.Sit and hum.SeatPart == driverSeat and (not hull or not hull.Anchored) then
+            return true
+        end
+
+        -- เดิน/ว่ายไปจ่อท้ายเรือตรงตำแหน่ง DriverSeat เท่านั้น
+        safeGlideTo(CFrame.new(driverSeat.Position + Vector3.new(0, 1.4, 0)), 14.0, nil, true)
+        zeroVelocity(getMyHRP())
         if setAntiSeatLock then setAntiSeatLock(hum, false) end
 
-        local hrp = getMyHRP()
-        if hrp and typeof(firetouchinterest) == "function" then
+        -- ยิง ProximityPrompt บน DriverSeat ให้เซิร์ฟเวอร์จับนั่งขับจริงและปลด Anchored
+        local drivePrompt = findDriverSeatPrompt(boatModel, driverSeat)
+        if drivePrompt then
             pcall(function()
-                firetouchinterest(hrp, seat, 0)
-                task.wait(0.05)
-                firetouchinterest(hrp, seat, 1)
+                local oldHold = drivePrompt.HoldDuration
+                drivePrompt.HoldDuration = 0
+                if typeof(fireproximityprompt) == "function" then
+                    fireproximityprompt(drivePrompt)
+                elseif drivePrompt.InputHoldBegin and drivePrompt.InputHoldEnd then
+                    drivePrompt:InputHoldBegin()
+                    task.wait(0.02)
+                    drivePrompt:InputHoldEnd()
+                end
+                drivePrompt.HoldDuration = oldHold
             end)
         end
-        pcall(function() seat:Sit(hum) end)
-    end
 
-    -- รอให้เซิร์ฟเวอร์รับรู้การนั่งและปลด hull.Anchored ออกจริง (สูงสุด 2.5 วิ)
-    local t0 = os.clock()
-    while RUNTIME.alive and isBoatActive() and (os.clock() - t0) < 2.5 do
-        if hum.Sit and hum.SeatPart == seat then
-            if not hull or not hull.Anchored then
+        local t0 = os.clock()
+        while RUNTIME.alive and isBoatActive() and (os.clock() - t0) < 1.25 do
+            if hum.Sit and hum.SeatPart == driverSeat and (not hull or not hull.Anchored) then
                 return true
+            elseif hum.Sit and hum.SeatPart and hum.SeatPart ~= driverSeat then
+                hum.Jump = true
+                hum.Sit = false
+                local w = hum.SeatPart:FindFirstChild("SeatWeld")
+                if w then pcall(function() w:Destroy() end) end
+                task.wait(0.15)
+                break
             end
-        else
-            if setAntiSeatLock then setAntiSeatLock(hum, false) end
-            pcall(function() seat:Sit(hum) end)
+            task.wait(0.08)
         end
-        task.wait(0.10)
+
+        if not (hum.Sit and hum.SeatPart == driverSeat) then
+            pcall(function() driverSeat:Sit(hum) end)
+            task.wait(0.25)
+        end
     end
 
-    return hum.Sit == true and (not hull or not hull.Anchored)
+    return hum.Sit == true and hum.SeatPart == driverSeat and (not hull or not hull.Anchored)
 end
 
 local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
@@ -5309,10 +4956,20 @@ local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
         local segDeadline = os.clock() + 45.0
 
         while RUNTIME.alive and isBoatActive() do
-            if not (hum.Sit and boatModel.Parent) or (hull and hull.Anchored) then
+            if not boatModel.Parent then
                 RUNTIME.boatAutoTarget, RUNTIME.boatCachedCtrl = nil, nil
                 RUNTIME.boatReverseUntil = 0
                 return false
+            end
+            -- ระบบกันตกเรือกลางทาง: ถ้าหลุดจาก DriverSeat หรือตกน้ำ ให้ว่ายกลับขึ้น DriverSeat อัตโนมัติ
+            local drvSeat = boatModel:FindFirstChild("DriverSeat")
+            if not hum.Sit or hum.SeatPart ~= drvSeat or (hull and hull.Anchored) then
+                RUNTIME.boatAutoTarget, RUNTIME.boatCachedCtrl = nil, nil
+                RUNTIME.boatReverseUntil = 0
+                if not (drvSeat and boardBoatSafely(drvSeat, hum)) then
+                    return false
+                end
+                RUNTIME.boatAutoTarget = Vector3.new(liveWp.X, 0, liveWp.Z)
             end
 
             if isRodEquipped() then
@@ -5531,8 +5188,8 @@ local function ensureBoatReadyNearPlayer(maxSearchDist)
     local searchDist = maxSearchDist or 160
     local boatModel, seat = findOwnedBoatModel()
 
-    -- 1. นั่งอยู่บนเรือตัวเองอยู่แล้ว
-    if hum.Sit and hum.SeatPart and boatModel and hum.SeatPart:IsDescendantOf(boatModel) then
+    -- 1. นั่งอยู่บนตำแหน่งคนขับ (DriverSeat) ของเรือตัวเองอยู่แล้ว
+    if hum.Sit and hum.SeatPart and boatModel and hum.SeatPart.Name == "DriverSeat" and hum.SeatPart:IsDescendantOf(boatModel) then
         return boatModel, hum.SeatPart, true
     end
 
@@ -5652,27 +5309,15 @@ pilotBoatOrWalkRaw = function(targetCF, spotName)
             return false
         end
 
-        -- ตรวจสอบว่าถึงจุดหมายทางน้ำที่เรือจอดได้จริงหรือไม่ (ระยะห่าง <= 38 สตัด)
-        local curHrp = getMyHRP()
-        local remDist = curHrp and (curHrp.Position - targetPos).Magnitude or 0
-        if remDist > 38.0 and not isWestRiverBranch(targetPos) then
-            -- หากเรือหยุดก่อนถึงปลายทางเกิน 38 สตัด ห้ามลงเดินเท้าตัดแมพเด็ดขาด!
-            notify({
-                Title = "⚠️ เรือหยุดก่อนถึงจุดหมาย",
-                Content = string.format("เหลือระยะทาง %.0f สตัด (ยกเลิกการลงเดินเท้าเพื่อป้องกันเดินข้ามแมพ)", remDist),
-                Duration = 4
-            })
-            return false
-        end
-
-        -- ลงจากเรือเฉพาะเมื่อเรือเทียบตลิ่งใกล้จุดหมายจริงแล้ว
+        -- ลงจากเรือที่จุดเทียบท่าที่ใกล้จุดหมายที่สุด แล้วเดินต่อบนบกอย่างปลอดภัย (ครอบคลุมบ้านและร้านค้าลึกบนบก)
         disembarkBoatSafely(hum)
         task.wait(0.18)
 
-        curHrp = getMyHRP()
-        if curHrp and remDist > 3.0 and remDist <= 38.0 then
-            safeGlideTo(targetCF, 14.0)
-            zeroVelocity(curHrp)
+        local curHrp = getMyHRP()
+        local remDist = curHrp and (curHrp.Position - targetPos).Magnitude or 0
+        if curHrp and remDist > 3.0 then
+            safeGlideTo(targetCF, 14.2)
+            zeroVelocity(getMyHRP())
         end
         return true
     end)
@@ -6195,259 +5840,274 @@ local function resolvePondGeometry(myPlotId)
     if not myPlotId then return nil end
 
     local pondTank, cashPrompt, pondCenter, cashPos = nil, nil, nil, nil
+    local defendedSpots = {}
 
-    -- 1. Query CollectionService HomeTank
+    -- เก็บทั้งบ่อดินและตู้ปลานอกบ้านทุกใบ (รวมตู้ที่ใส่แม่กุญแจ Lock 1-3)
     for _, tank in ipairs(cs:GetTagged("HomeTank")) do
-        if tank:GetAttribute("Plot") == myPlotId and (tank.Name == "PondTank" or tank:GetAttribute("Kind") == "pond" or tank:GetAttribute("Slot") == "pond") then
-            pondTank = tank
-            break
+        if tank:GetAttribute("Plot") == myPlotId then
+            local pos = Modules.getSafeInstancePos(tank)
+            if pos then
+                table.insert(defendedSpots, { inst = tank, pos = pos, lock = tonumber(tank:GetAttribute("Lock")) or 0 })
+            end
+            if tank.Name == "PondTank" or tank:GetAttribute("Kind") == "pond" or tank:GetAttribute("Slot") == "pond" then
+                pondTank = tank
+                pondCenter = pos
+            end
         end
     end
 
-    -- 2. Query Town Plots model fallback
     if not pondTank then
-        local town = workspace:FindFirstChild("Town")
-        local plots = town and town:FindFirstChild("Plots")
+        local plots = workspace:FindFirstChild("Town") and workspace.Town:FindFirstChild("Plots")
         local plotFolder = plots and (plots:FindFirstChild("Plot" .. tostring(myPlotId)) or plots:FindFirstChild(tostring(myPlotId)))
         if plotFolder then
             local shop = plotFolder:FindFirstChild("Shop")
             local partPond = shop and shop:FindFirstChild("Part_pond")
             pondTank = partPond and partPond:FindFirstChild("PondTank")
+            pondCenter = Modules.getSafeInstancePos(pondTank) or Modules.getSafeInstancePos(partPond)
         end
     end
 
-    -- 3. Find PondCash proximity prompt
     for _, prompt in ipairs(cs:GetTagged("PondCash")) do
         if prompt:GetAttribute("Plot") == myPlotId or (prompt.Parent and prompt.Parent:GetAttribute("Plot") == myPlotId) then
             cashPrompt = prompt
+            cashPos = getPromptWorldPosition(prompt)
             break
         end
     end
 
-    if pondTank then
-        local ok, cf = pcall(function() return pondTank:GetPivot() end)
-        if ok and cf then pondCenter = cf.Position end
+    local homeCenter = pondCenter or Modules.getMyHomePos()
+    if not homeCenter then return nil end
+    if #defendedSpots == 0 then
+        table.insert(defendedSpots, { inst = pondTank, pos = homeCenter, lock = 0 })
     end
 
-    if cashPrompt and cashPrompt.Parent and cashPrompt.Parent:IsA("BasePart") then
-        cashPos = cashPrompt.Parent.Position
-    elseif pondTank and pondTank:FindFirstChild("PondCashSpot") then
-        cashPos = pondTank.PondCashSpot.Position
-    end
-
-    local guardStandCF = nil
-    if cashPos and pondCenter then
-        local standPos = Vector3.new(cashPos.X, cashPos.Y + 1.5, cashPos.Z + 1.2)
-        local lookPos = Vector3.new(pondCenter.X, standPos.Y, pondCenter.Z)
-        guardStandCF = CFrame.lookAt(standPos, lookPos)
-    elseif pondCenter then
-        guardStandCF = CFrame.lookAt(pondCenter + Vector3.new(-10, 3.5, 0), pondCenter)
-    end
+    local guardStandCF = cashPos
+        and CFrame.lookAt(Vector3.new(cashPos.X, cashPos.Y + 1.5, cashPos.Z + 1.2), Vector3.new(homeCenter.X, cashPos.Y + 1.5, homeCenter.Z))
+        or CFrame.lookAt(homeCenter + Vector3.new(0, 3.0, -8), homeCenter)
 
     return {
         pondTank = pondTank,
         cashPrompt = cashPrompt,
-        pondCenter = pondCenter,
+        pondCenter = homeCenter,
         cashPos = cashPos,
+        defendedSpots = defendedSpots,
         guardStandCF = guardStandCF
     }
 end
 
-function Modules.executePondDefenseCombat(intruderChar, geo)
-    if RUNTIME.isDefendingPond then return end
-    RUNTIME.isDefendingPond = true
+function Modules.executePondDefenseCombat(intruderPlr, geo)
+    if RUNTIME.isDefendingPond or not intruderPlr then return end
+    if typeof(intruderPlr) == "Instance" and intruderPlr:IsA("Model") then
+        intruderPlr = Players:GetPlayerFromCharacter(intruderPlr)
+    end
+    if not intruderPlr then return end
 
+    RUNTIME.isDefendingPond = true
     local prevAutoFish = CFG.AutoFish
     CFG.AutoFish = false
-    pcall(function() sendReel(0, true) end)
-
-    local intruderHrp = intruderChar:FindFirstChild("HumanoidRootPart")
-    local intruderHum = intruderChar:FindFirstChildOfClass("Humanoid")
-    local intruderName = intruderChar.Name
+    pcall(function() sendReel(0, true); Input:FireServer("cancel") end)
 
     notify({
-        Title = "🚨 ขโมยบุกบ่อดิน! (Thief Detected)",
-        Content = string.format("ตรวจพบ: %s กำลังเข้าใกล้บ่อดิน! ชักไม้เบสบอลเข้าตีทันที!", intruderName),
+        Title = "🚨 โจรบุกบ้าน! (Home Defense)",
+        Content = string.format("ตรวจพบ %s เข้าเขตบ่อ/ตู้ปลา! กำลังไล่ตีจนเข้าคุก (3 ที)", intruderPlr.Name),
         Duration = 4
     })
 
     Modules.ensureBatEquipped()
-
     local strikeStart = os.clock()
-    local maxCombatDuration = 14.0 -- Combat chase cap
+    local hitsLanded = 0
 
-    while RUNTIME.alive and (os.clock() - strikeStart) < maxCombatDuration do
-        if not intruderChar or not intruderChar.Parent or not intruderHrp or not intruderHrp.Parent then break end
-        if intruderHum and intruderHum.Health <= 0 then break end
+    -- ไล่ตีจนกว่าโจรจะเข้าคุก (ThiefHits = 3 -> ส่งเข้าสถานีตำรวจ X:-142..-98, Z:-210..-173) หรือหนีพ้น/ออกเกม
+    while RUNTIME.alive and (os.clock() - strikeStart) < 28.0 do
+        if not intruderPlr.Parent then break end
+        local intruderChar = intruderPlr.Character
+        local intruderHrp = intruderChar and intruderChar:FindFirstChild("HumanoidRootPart")
+        local intruderHum = intruderChar and intruderChar:FindFirstChildOfClass("Humanoid")
+        if not (intruderHrp and intruderHum and intruderHum.Health > 0) then break end
 
         local hrp = getMyHRP()
         if not hrp then break end
 
-        local myPos = hrp.Position
-        local targetPos = intruderHrp.Position
-        local distToPond = geo and geo.pondCenter and (targetPos - geo.pondCenter).Magnitude or 0
-        local distToMe = (targetPos - myPos).Magnitude
-
-        -- Stop if intruder fled beyond 50 studs of our pond and is not our direct thief
-        local plr = Players:GetPlayerFromCharacter(intruderChar)
-        local isDirectThief = plr and plr:GetAttribute("ThiefFrom") == lp.UserId
-        if distToPond > 50.0 and not isDirectThief then
+        -- เช็คว่าโจรโดนส่งเข้าห้องขังสถานีตำรวจแล้วหรือยัง
+        local tp = intruderHrp.Position
+        if tp.X >= -145 and tp.X <= -95 and tp.Z >= -215 and tp.Z <= -170 then
+            notify({ Title = "🚔 โจรเข้าคุกแล้ว!", Content = intruderPlr.Name .. " ถูกส่งเข้าคุกเรียบร้อย!", Duration = 4 })
             break
         end
 
-        -- Authoritative Bat Strike Range (<= 5.8 studs)
-        if distToMe <= 5.8 then
-            hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(targetPos.X, hrp.Position.Y, targetPos.Z))
+        local isDirectThief = (intruderPlr:GetAttribute("ThiefFrom") == lp.UserId) or (intruderPlr:GetAttribute("Thief") == true)
+        local distToHome = geo and geo.pondCenter and (tp - geo.pondCenter).Magnitude or 0
+        if not isDirectThief and distToHome > 65.0 then break end
+        if distToHome > 130.0 and hitsLanded >= 3 then break end
+
+        local distToMe = (tp - hrp.Position).Magnitude
+        if distToMe <= 5.5 then
+            hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(tp.X, hrp.Position.Y, tp.Z))
             zeroVelocity(hrp)
             Modules.ensureBatEquipped()
-
-            local batTool = lp.Character and (lp.Character:FindFirstChild("Bat") or lp.Character:FindFirstChildOfClass("Tool"))
-            if batTool and typeof(batTool.Activate) == "function" then
+            local batTool = lp.Character and lp.Character:FindFirstChildOfClass("Tool")
+            if batTool and batTool:GetAttribute("Bat") and typeof(batTool.Activate) == "function" then
                 pcall(function() batTool:Activate() end)
             end
             Input:FireServer("bat")
-            task.wait(0.58) -- Bat swing cooldown
+            hitsLanded = hitsLanded + 1
+            task.wait(0.58)
         else
-            -- Rapid ground-glide approach (22.0 studs/s)
-            local approachPos = targetPos - ((targetPos - myPos).Unit * 3.6)
-            local targetCF = CFrame.lookAt(approachPos, targetPos)
-            safeGlideTo(targetCF, 22.0)
-            task.wait(0.04)
+            local delta = tp - hrp.Position
+            local approachPos = tp - (delta.Magnitude > 0.1 and delta.Unit * 3.2 or Vector3.zero)
+            safeGlideTo(CFrame.lookAt(approachPos, tp), 23.0)
+            task.wait(0.05)
         end
     end
 
-    notify({
-        Title = "🛡️ จัดการขโมยสำเร็จ (Thief Repelled)",
-        Content = string.format("ขับไล่ %s พ้นเขตบ่อดินเรียบร้อย กำลังกลับจุดเฝ้าบ่อ...", intruderName),
-        Duration = 4
-    })
-
-    -- Return to guard post
     if CFG.ReturnToGuardPost and geo and geo.guardStandCF then
-        safeGlideTo(geo.guardStandCF, 22.0)
-    end
-
-    -- Re-equip rod & restore auto-fishing
-    if prevAutoFish then
-        ensureRodEquipped()
-        CFG.AutoFish = true
-        if RUNTIME.phase == "idle" and not RUNTIME.isSelling then
-            task.spawn(function() doAutoCast() end)
-        end
+        safeGlideTo(geo.guardStandCF, 18.0)
     end
 
     RUNTIME.isDefendingPond = false
+    if not RUNTIME.isGuardingHomeAtNight and prevAutoFish then
+        ensureRodEquipped()
+        CFG.AutoFish = true
+        if RUNTIME.phase == "idle" and not isBusy() then
+            task.spawn(doAutoCast)
+        end
+    end
 end
 
 function Modules.updatePondGuardEngine(now)
-    if not CFG.PondGuard then return end
+    if not (CFG.PondGuard or CFG.NightHomeDefense) then return end
     if isBusy() and RUNTIME.busyMode ~= "pondGuard" then return end
-    if (now - (RUNTIME.lastPondGuardCheckAt or 0)) < 0.40 then return end
+    if (now - (RUNTIME.lastPondGuardCheckAt or 0)) < 0.50 then return end
     RUNTIME.lastPondGuardCheckAt = now
 
     local myPlot = lp:GetAttribute("Plot")
     if not myPlot then return end
+    local hrp = getMyHRP()
+    if not hrp then return end
+
+    local clockTime = Lighting.ClockTime
+    local needGoHome = (clockTime >= 18.35 or clockTime < 5.55)   -- เริ่มขับเรือกลับบ้าน 18:20 เฝ้าจน 05:33
+    local isStealWindow = (clockTime >= 18.85 or clockTime < 5.55)
+    local isMorning = (clockTime >= 5.55 and clockTime < 18.35)
+
+    -- [SUB-ROUTINE 0]: ระบบกลับบ้านเฝ้ากลางคืนอัตโนมัติ (อยู่ที่ไหนก็ตาม -> ขับเรือกลับบ้าน -> เช้าขับเรือกลับหมายเดิม)
+    if CFG.NightHomeDefense then
+        local homePos = Modules.getMyHomePos()
+        if needGoHome and not RUNTIME.isGuardingHomeAtNight and homePos then
+            local curPh = lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle"
+            if curPh ~= "fight" and curPh ~= "strike" and curPh ~= "landing" then
+                RUNTIME.isGuardingHomeAtNight = true
+                RUNTIME.preGuardAutoFish = CFG.AutoFish
+                RUNTIME.preGuardFishingCF = ((hrp.Position - homePos).Magnitude > 60) and hrp.CFrame or RUNTIME.lastFishingSpotCF
+                CFG.AutoFish = false
+                task.spawn(function()
+                    if Modules.recallAllRodsOnStop then Modules.recallAllRodsOnStop() end
+                    notify({
+                        Title = "🌙 ใกล้ค่ำแล้ว · ล่องเรือกลับเฝ้าบ้าน!",
+                        Content = "กำลังเดินทางกลับบ้านเพื่อป้องกันบ่อดินและตู้ปลาข้างนอกจนถึงเช้า",
+                        Duration = 5
+                    })
+                    local arrived = Modules.boatAutoTravelTo(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), "บ้านของฉัน")
+                    if arrived then
+                        local g = resolvePondGeometry(myPlot)
+                        if g and g.guardStandCF then safeGlideTo(g.guardStandCF, 14.0) end
+                        Modules.ensureBatEquipped()
+                    end
+                end)
+                return
+            end
+        elseif isMorning and RUNTIME.isGuardingHomeAtNight then
+            RUNTIME.isGuardingHomeAtNight = false
+            task.spawn(function()
+                if CFG.AutoMorningCollect then
+                    local g = resolvePondGeometry(myPlot)
+                    if g and g.cashPos then
+                        safeGlideTo(CFrame.new(g.cashPos + Vector3.new(0, 1.5, 1.0)), 14.0)
+                        task.wait(0.2)
+                    end
+                    Input:FireServer("pondCash")
+                    if g and g.cashPrompt and typeof(fireproximityprompt) == "function" then
+                        pcall(fireproximityprompt, g.cashPrompt)
+                    end
+                    if CFG.AutoFeedPond then
+                        task.wait(0.3)
+                        Input:FireServer("feed", "pond")
+                        Input:FireServer("feedLive", "pond")
+                    end
+                    task.wait(0.4)
+                end
+
+                local backCF = RUNTIME.preGuardFishingCF or RUNTIME.lastFishingSpotCF
+                if backCF then
+                    notify({
+                        Title = "🌅 เช้าแล้ว! ล่องเรือกลับหมายตกปลาเดิม",
+                        Content = "เก็บเงินบ่อเรียบร้อย กำลังนั่งเรือกลับจุดตกปลาเดิม...",
+                        Duration = 5
+                    })
+                    Modules.boatAutoTravelTo(backCF, "หมายตกปลาเดิม", { equipRod = true })
+                end
+                CFG.AutoFish = (RUNTIME.preGuardAutoFish ~= false)
+                RUNTIME.lastCastAt = 0
+            end)
+            return
+        end
+    end
 
     local geo = resolvePondGeometry(myPlot)
     if not geo or not geo.pondCenter then return end
     RUNTIME.pondCenterPos = geo.pondCenter
     if geo.guardStandCF then RUNTIME.guardStandCF = geo.guardStandCF end
 
-    local hrp = getMyHRP()
-    if not hrp then return end
-
-    local clockTime = Lighting.ClockTime
-    local isNight = (clockTime >= 19.0 or clockTime < 5.5)
-    local isMorning = (clockTime >= 5.5 and clockTime <= 18.0)
-
-    -- [SUB-ROUTINE 1]: MORNING REVENUE COLLECTION (เก็บเงินตอนเช้าอัตโนมัติ)
-    if CFG.AutoMorningCollect then
-        if isMorning and (RUNTIME.wasNight or (now - (RUNTIME.lastPondCollectAt or 0)) >= 60.0) then
-            local pondCash = 0
-            if geo.pondTank then
-                pondCash = (geo.pondTank:GetAttribute("Cash") or 0) + (geo.pondTank:GetAttribute("CashNew") or 0)
+    -- [SUB-ROUTINE 1]: เก็บเงินบ่อดินยามเช้า (กรณียืนอยู่ใกล้บ้านอยู่แล้ว)
+    if CFG.AutoMorningCollect and isMorning and (RUNTIME.wasNight or (now - (RUNTIME.lastPondCollectAt or 0)) >= 60.0) then
+        local distToCash = geo.cashPos and (hrp.Position - geo.cashPos).Magnitude or 999
+        if distToCash <= 35.0 then
+            Input:FireServer("pondCash")
+            if geo.cashPrompt and typeof(fireproximityprompt) == "function" then
+                pcall(function() fireproximityprompt(geo.cashPrompt) end)
             end
-
-            local distToCash = geo.cashPos and (hrp.Position - geo.cashPos).Magnitude or 999
-            if distToCash <= 35.0 then
-                Input:FireServer("pondCash")
-                if geo.cashPrompt and typeof(fireproximityprompt) == "function" then
-                    pcall(function() fireproximityprompt(geo.cashPrompt) end)
-                end
-                RUNTIME.lastPondCollectAt = now
-                notify({
-                    Title = "🌅 เก็บเงินบ่อดินยามเช้า (Morning Harvest)",
-                    Content = string.format("เก็บเงินจากบ่อดินเรียบร้อยแล้ว (สะสม: %s เหรียญ)", formatNumber(pondCash)),
-                    Duration = 4
-                })
-
-                if CFG.AutoFeedPond then
-                    task.delay(0.5, function()
-                        Input:FireServer("feed", "pond")
-                        Input:FireServer("feedLive", "pond")
-                    end)
-                end
-            elseif CFG.ReturnToGuardPost and distToCash <= 75.0 and not RUNTIME.fightActive then
-                task.spawn(function()
-                    runExclusive("pondGuard", function()
-                        if geo.cashPos then
-                            local targetCF = CFrame.lookAt(geo.cashPos + Vector3.new(0, 1.5, 1.2), geo.pondCenter)
-                            safeGlideTo(targetCF, 22.0)
-                            task.wait(0.2)
-                            Input:FireServer("pondCash")
-                            if geo.cashPrompt and typeof(fireproximityprompt) == "function" then
-                                pcall(function() fireproximityprompt(geo.cashPrompt) end)
-                            end
-                            RUNTIME.lastPondCollectAt = os.clock()
-                        end
-                    end)
+            RUNTIME.lastPondCollectAt = now
+            if CFG.AutoFeedPond then
+                task.delay(0.5, function()
+                    Input:FireServer("feed", "pond")
+                    Input:FireServer("feedLive", "pond")
                 end)
             end
-            RUNTIME.wasNight = false
-        elseif isNight then
-            RUNTIME.wasNight = true
         end
+        RUNTIME.wasNight = false
+    elseif isStealWindow then
+        RUNTIME.wasNight = true
     end
 
-    -- [SUB-ROUTINE 2]: THIEF & INTRUDER DETECTION (ตรวจจับคนมาขโมยปลา)
-    if CFG.AutoBeatThieves and not RUNTIME.isDefendingPond then
-        local targetIntruder, threatLevel = nil, 0
+    -- [SUB-ROUTINE 2]: ตรวจจับโจรทั้งรอบบ่อดินและตู้ปลาข้างนอกทุกใบ (รวมตู้ใส่แม่กุญแจ)
+    if CFG.AutoBeatThieves and not RUNTIME.isDefendingPond and (hrp.Position - geo.pondCenter).Magnitude <= 145 then
+        local targetPlr, threatLevel = nil, 0
         local maxRange = CFG.PondGuardRange or 35.0
 
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= lp and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-                local char = plr.Character
-                local pPos = char.HumanoidRootPart.Position
-                local distToPond = (pPos - geo.pondCenter).Magnitude
-                local hum = char:FindFirstChildOfClass("Humanoid")
-                local isAlive = hum and hum.Health > 0
+                local pPos = plr.Character.HumanoidRootPart.Position
+                local pHum = plr.Character:FindFirstChildOfClass("Humanoid")
+                if pHum and pHum.Health > 0 then
+                    local minSpotDist = math.huge
+                    for _, sp in ipairs(geo.defendedSpots) do
+                        local d = (pPos - sp.pos).Magnitude
+                        if d < minSpotDist then minSpotDist = d end
+                    end
 
-                if isAlive then
                     if plr:GetAttribute("ThiefFrom") == lp.UserId then
-                        targetIntruder = char
-                        threatLevel = 3
-                        break
-                    elseif plr:GetAttribute("Thief") == true and distToPond <= 45.0 then
-                        if threatLevel < 2 then
-                            targetIntruder = char
-                            threatLevel = 2
-                        end
-                    elseif distToPond <= maxRange then
-                        if isNight or distToPond <= 18.0 then
-                            if threatLevel < 1 then
-                                targetIntruder = char
-                                threatLevel = 1
-                            end
-                        end
+                        targetPlr, threatLevel = plr, 3; break
+                    elseif plr:GetAttribute("Thief") == true and minSpotDist <= 55.0 and threatLevel < 2 then
+                        targetPlr, threatLevel = plr, 2
+                    elseif isStealWindow and minSpotDist <= maxRange and threatLevel < 1 then
+                        targetPlr, threatLevel = plr, 1
                     end
                 end
             end
         end
 
-        if targetIntruder then
-            task.spawn(function()
-                Modules.executePondDefenseCombat(targetIntruder, geo)
-            end)
+        if targetPlr then
+            task.spawn(Modules.executePondDefenseCombat, targetPlr, geo)
         end
     end
 end
@@ -6737,7 +6397,7 @@ function Modules.updateAutoBossHunter(now)
             CFG.DeepRiverPreset = prof.preset
             Modules.launchDeepWaterBoatPilot()
         elseif target.pos then
-            safeWarpToCFrame(CFrame.new(target.pos + Vector3.new(0, 2, 0)), { mode = "boss", equipRod = true })
+            Modules.boatAutoTravelTo(CFrame.new(target.pos + Vector3.new(0, 2, 0)), target.name, { equipRod = true })
         end
     end)
 end
@@ -7193,8 +6853,9 @@ function Modules.visitLoyStand(targetCF, promptOrFinder, actionFn)
     return ok and res
 end
 
-function Modules.buyKrathongBait()
+function Modules.buyKrathongBait(buyPacks)
     if not LoyAsk then return false end
+    buyPacks = math.clamp(tonumber(buyPacks or CFG.RestockBuyCount) or 1, 1, 20)
     local prevBait = (RUNTIME.loyStateData and tonumber(RUNTIME.loyStateData.bait)) or nil
     local boothCF = CFrame.lookAt(VENDOR_COORDINATES.loy_booth.stand, VENDOR_COORDINATES.loy_booth.lookAt)
     local findPrompt = function()
@@ -7204,17 +6865,26 @@ function Modules.buyKrathongBait()
         return okP and p or nil
     end
 
+    local boughtCount = 0
     local res = Modules.visitLoyStand(boothCF, findPrompt, function()
-        return LoyAsk:InvokeServer("bait")
+        local lastRes = nil
+        for _ = 1, buyPacks do
+            local r = LoyAsk:InvokeServer("bait")
+            if typeof(r) ~= "table" or r.err then break end
+            lastRes = r
+            boughtCount = boughtCount + 1
+            task.wait(0.12)
+        end
+        return lastRes
     end)
 
-    if typeof(res) == "table" then
+    if typeof(res) == "table" and boughtCount > 0 then
         local newBait = tonumber(res.bait)
         RUNTIME.loyStateData = res
-        if not res.err and (prevBait == nil or (newBait and newBait > prevBait)) then
+        if prevBait == nil or (newBait and newBait > prevBait) then
             notify({
                 Title = "🪷 ซื้อเหยื่อกระทงสำเร็จ!",
-                Content = string.format("เหยื่อคงเหลือ: %d ชิ้น (แต้ม: %d)", newBait or 0, res.pts or 0),
+                Content = string.format("ซื้อ %d ถุง · คงเหลือ: %d ชิ้น (แต้ม: %d)", boughtCount, newBait or 0, res.pts or 0),
                 Duration = 3
             })
             return true
@@ -8271,6 +7941,7 @@ task.spawn(function()
         pcall(function() Modules.updatePlotAndPondCollector(now) end)
         pcall(function() Modules.updateSpectatorWatchdog(now) end)
         pcall(function() Modules.updateDayNightLureMatcher() end)
+        pcall(function() Modules.updateAutoOxygen(now) end)
     end
 end)
 
@@ -8284,6 +7955,44 @@ local pStatus  = Tabs.Fishing:AddParagraph({ Title = "สถานะเบ็�
 RUNTIME.pEconomy = Tabs.Fishing:AddParagraph({ Title = "เหรียญ · ถังปลา · ยอดตก", Content = "กำลังโหลดข้อมูล..." })
 
 Tabs.Fishing:AddSection("ระบบควบคุมบอทหลัก (Master Automation)")
+function Modules.recallAllRodsOnStop()
+    pcall(function() sendReel(0, true); setSteer(0, true) end)
+    pcall(function() Input:FireServer("cancel") end)
+
+    local rt = Modules.getClientRuntimeTable and Modules.getClientRuntimeTable()
+    if rt then
+        if rt.planted ~= nil then
+            if RUNTIME.plantedStandCF and (typeof(rt.atPlanted) ~= "function" or not rt.atPlanted()) then
+                safeGlideTo(RUNTIME.plantedStandCF, 14.0)
+                zeroVelocity(getMyHRP())
+            end
+            pcall(function() Input:FireServer("unplant") end)
+            task.wait(0.20)
+            pcall(function() Input:FireServer("cancel") end)
+        end
+        if rt.bottom ~= nil then
+            local standCF = RUNTIME.plantedStandCF
+                or (typeof(rt.bottom.at) == "Vector3" and CFrame.new(rt.bottom.at + Vector3.new(0, 2.0, 0)))
+            if standCF and (typeof(rt.atBottom) ~= "function" or not rt.atBottom()) then
+                safeGlideTo(standCF, 14.0)
+                zeroVelocity(getMyHRP())
+                task.wait(0.10)
+            end
+            pcall(function() Input:FireServer("bottomTake") end)
+            task.wait(0.25)
+            pcall(function() Input:FireServer("cancel") end)
+        end
+    end
+
+    RUNTIME.usingSecondaryHand = false
+    RUNTIME.lastPlantActionAt = 0
+    RUNTIME.plantFreePendingUntil = 0
+    RUNTIME.phase = "idle"
+    RUNTIME.fightActive, RUNTIME.tugActive, RUNTIME.hooksetFired = false, false, false
+    RUNTIME.isSelling = false
+    syncClientPhase("idle")
+end
+
 Tabs.Fishing:AddToggle("MasterAutoFish", { Title = "เปิดระบบตกปลาอัตโนมัติ (Master Auto Fish)", Default = true }):OnChanged(function(v)
     CFG.AutoFish = v
     if v then
@@ -8303,18 +8012,26 @@ Tabs.Fishing:AddToggle("MasterAutoFish", { Title = "เปิดระบบต�
         if CFG.AutoEquipRod then ensureRodEquipped() end
         task.spawn(function()
             task.wait(0.2)
-            if CFG.AutoFish and RUNTIME.phase == "idle" and not RUNTIME.isSelling then
+            if CFG.AutoFish and RUNTIME.phase == "idle" and not isBusy() then
                 if not checkAutoSell() then doAutoCast() end
             end
         end)
     else
-        pcall(function() Input:FireServer("cancel") end)
-        pcall(function() sendReel(0, true) end)
-        pcall(function() setSteer(0, true) end)
-        RUNTIME.phase = "idle"
-        RUNTIME.fightActive, RUNTIME.tugActive, RUNTIME.hooksetFired = false, false, false
-        RUNTIME.isSelling = false
-        syncClientPhase("idle")
+        task.spawn(function()
+            Modules.recallAllRodsOnStop()
+            notify({ Title = "⏹️ ปิดระบบตกปลาแล้ว", Content = "เก็บสายและเก็บคันหน้าดินอันที่ 2 เรียบร้อย", Duration = 2.5 })
+        end)
+    end
+end)
+
+Tabs.Fishing:AddDropdown("SelectedLure", {
+    Title = "🪱 เลือกเหยื่อที่ใช้งาน (Quick Lure Select)",
+    Values = lureDisplayList,
+    Multi = false,
+    Default = defaultLureDisp
+}):OnChanged(function(v)
+    if RUNTIME.uiReady then
+        setEquippedLure(v, true)
     end
 end)
 
@@ -8352,6 +8069,23 @@ Tabs.Fishing:AddSlider("AutoTankStars", { Title = "ระดับดาวข�
 Tabs.Fishing:AddToggle("AutoTankMut", { Title = "เก็บปลากลายพันธุ์ทั้งหมดเข้าตู้เซฟ", Default = true }):OnChanged(function(v) CFG.AutoTankMut = v end)
 Tabs.Fishing:AddToggle("AutoRestockBait", { Title = "ซื้อเหยื่อเติมอัตโนมัติเมื่อใกล้หมด", Default = true }):OnChanged(function(v) CFG.AutoRestockBait = v end)
 Tabs.Fishing:AddSlider("RestockThreshold", { Title = "จำนวนเหยื่อขั้นต่ำเพื่อสั่งซื้อใหม่", Default = 3, Min = 1, Max = 10, Rounding = 0 }):OnChanged(function(v) CFG.RestockThreshold = v end)
+Tabs.Fishing:AddSlider("RestockBuyCount", { Title = "จำนวนแพ็กเหยื่อที่ซื้อต่อ 1 รอบ", Description = "ซื้อทีเดียวหลายแพ็กในเที่ยวเดียว ไม่เดินวนไปมา", Default = 5, Min = 1, Max = 20, Rounding = 0 }):OnChanged(function(v) CFG.RestockBuyCount = v end)
+
+Tabs.Fishing:AddSection("🫧 ระบบออกซิเจนถังปลา (Auto O2 Bottle)")
+Tabs.Fishing:AddToggle("AutoOxygenToggle", { Title = "เปลี่ยนขวดออกซิเจนอัตโนมัติเมื่อใกล้หมด", Description = "ปลาในถังเครียดช้าลง 4 เท่า · เปลี่ยนขวดสำรองได้ทันทีจากทุกที่", Default = true }):OnChanged(function(v) CFG.AutoOxygen = v end)
+Tabs.Fishing:AddDropdown("OxygenSizeSelect", { Title = "ขนาดขวดออกซิเจนที่ต้องการใช้/ซื้อ", Values = { "ขวดใหญ่ big (7200 วิ · $9,000)", "ขวดกลาง mid (2700 วิ · $4,000)", "ขวดเล็ก small (900 วิ · $1,500)" }, Multi = false, Default = "ขวดใหญ่ big (7200 วิ · $9,000)" }):OnChanged(function(v)
+    CFG.OxygenSize = v:find("small") and "small" or (v:find("mid") and "mid" or "big")
+end)
+Tabs.Fishing:AddToggle("AutoBuyOxygenToggle", { Title = "ล่องเรือไปซื้อขวดออกซิเจนที่ร้านลุงเบ็ดเมื่อขวดสำรองหมด", Default = true }):OnChanged(function(v) CFG.AutoBuyOxygen = v end)
+Tabs.Fishing:AddSlider("OxygenBuyCountSlider", { Title = "จำนวนขวดออกซิเจนที่ซื้อต่อรอบ", Default = 3, Min = 1, Max = 20, Rounding = 0 }):OnChanged(function(v) CFG.OxygenBuyCount = v end)
+Tabs.Fishing:AddButton({
+    Title = "🫧 เปลี่ยนขวดออกซิเจนทันที (Swap O2 Now)",
+    Callback = function() Modules.swapOxygenNow(CFG.OxygenSize, false) end
+})
+Tabs.Fishing:AddButton({
+    Title = "🛒 ล่องเรือไปซื้อขวดออกซิเจนทันที",
+    Callback = function() task.spawn(Modules.buyOxygenAtTackleShop, CFG.OxygenSize, CFG.OxygenBuyCount) end
+})
 
 Tabs.Fishing:AddSection("⭐ ติดดาวปลาอัตโนมัติ (Auto-Star)")
 Tabs.Fishing:AddToggle("AutoStar", {
@@ -8411,16 +8145,7 @@ Tabs.Fishing:AddToggle("AutoFight", { Title = "สู้ปลา & มินิ
 Tabs.Fishing:AddToggle("AutoLand", { Title = "ตักปลา & ลากขึ้นฝั่ง", Default = true }):OnChanged(function(v) CFG.AutoLand = v end)
 Tabs.Fishing:AddSlider("CastPower", { Title = "แรงตีสายเริ่มต้น", Default = 0.70, Min = 0.25, Max = 1.0, Rounding = 2 }):OnChanged(function(v) CFG.CastPower = v end)
 Tabs.Fishing:AddSlider("CastCooldown", { Title = "ระยะหน่วงหลังตีสาย (วิ)", Default = 0.9, Min = 0.8, Max = 4.0, Rounding = 1 }):OnChanged(function(v) CFG.CastCooldown = v end)
-Tabs.Fishing:AddDropdown("SelectedLure", {
-    Title = "เลือกเหยื่อที่ใช้งาน",
-    Values = lureDisplayList,
-    Multi = false,
-    Default = defaultLureDisp
-}):OnChanged(function(v)
-    if RUNTIME.uiReady then
-        setEquippedLure(v, true)
-    end
-end)
+
 
 do
     local bottomRodList = { "Auto (คันหน้าดินที่ถืออยู่)" }
@@ -8547,59 +8272,13 @@ Tabs.Fishing:AddToggle("AutoSellOnFull", {
     Default = true
 }):OnChanged(function(v) CFG.AutoSellOnFull = v end)
 
-Tabs.Fishing:AddToggle("UseRiderAutoSell", {
-    Title = "🛵 ใช้ไรเดอร์รับซื้อปลาทุกที่ (Pass_rider · หัก 10%)",
-    Description = "ขายปลาผ่านไรเดอร์ทันทีโดยไม่ต้องลุกจากจุดตกปลา (ใช้เมื่อมีเกมพาส Pass_rider)",
-    Default = true
-}):OnChanged(function(v) CFG.useRiderAutoSell = v end)
-
-Tabs.Fishing:AddToggle("RiderKeepKingbuk", {
-    Title = "👑 เก็บพญาบึกไว้ขายเต็มราคาที่ร้าน (Rider Keep Kingbuk)",
-    Description = "ไม่ขายพญาบึกผ่านไรเดอร์ เพื่อเก็บไว้ขายราคาเต็มที่เคาน์เตอร์ตลาด",
-    Default = false
-}):OnChanged(function(v) CFG.riderKeepKingbuk = v end)
-
-Tabs.Fishing:AddSlider("RiderWaitMaxSec", {
-    Title = "⏳ รอคูลดาวน์ไรเดอร์สูงสุด (วินาที)",
-    Description = "หากไรเดอร์ติดคูลดาวน์ไม่เกินจำนวนนี้ จะรอขายที่จุดเดิมแทนการเดินทางกลับตลาด",
-    Default = 25,
-    Min = 5,
-    Max = 60,
-    Rounding = 0
-}):OnChanged(function(v) CFG.riderWaitMaxSec = v end)
-
-Tabs.Fishing:AddButton({
-    Title = "🛵 เรียกไรเดอร์ขายปลาทันที (Call Rider Now)",
-    Description = "ส่งคำสั่งเรียกไรเดอร์มารับซื้อปลาที่จุดตกปลาทันที (ข้ามปลาติดดาว)",
-    Callback = function()
-        task.spawn(function()
-            local ok, status, count = boatNav.tryRiderSellAll({
-                keepFav = (CFG.riderKeepFav ~= false),
-                keepKingbuk = (CFG.riderKeepKingbuk == true),
-                timeout = 10.0
-            })
-            if ok then
-                notify({ Title = "🛵 ขายปลาสำเร็จ!", Content = string.format("ขายผ่านไรเดอร์แล้ว %d ตัว", count), Duration = 3 })
-            elseif status == "cooldown" then
-                local rem = boatNav.getRiderCooldownRemaining()
-                notify({ Title = "⏳ ไรเดอร์ติดคูลดาวน์", Content = string.format("เหลืออีก %d วินาที", math.ceil(rem)), Duration = 3 })
-            elseif status == "no_pass" then
-                notify({ Title = "⚠️ ไม่มีเกมพาส Pass_rider", Content = "ต้องมีเกมพาสไรเดอร์ก่อนใช้งาน", Duration = 3 })
-            else
-                notify({ Title = "⚠️ ไม่สำเร็จ", Content = tostring(status), Duration = 3 })
-            end
-        end)
-    end
-})
-
 Tabs.Fishing:AddDropdown("SellTravelMode", {
     Title = "รูปแบบการเดินทางไปขาย",
-    Description = "เลือกวิธีการส่งปลาไปยังเคาน์เตอร์รับซื้อ",
-    Values = { "⚡ Instant Micro-Flash (วาร์ปเสี้ยววิ)", "🚶 Safe Glide Walk (เดินตามพื้นดิน)", "🚤 Boat Cruise (นั่งเรือกลับตลาด)" },
+    Description = "ใช้ระบบเรือล่องกลับตลาดอย่างปลอดภัย (ตัดวาร์ปไกลออกทั้งหมด กัน Error 267)",
+    Values = { "🚤 Boat Cruise (นั่งเรือกลับตลาด)", "🚶 Safe Glide Walk (เดินเมื่อใกล้ตลาด)" },
     Multi = false,
     Default = "🚤 Boat Cruise (นั่งเรือกลับตลาด)"
 }):OnChanged(function(v)
-    CFG.InstantRemoteSell = (v == "⚡ Instant Micro-Flash (วาร์ปเสี้ยววิ)")
     CFG.AutoCruiseRoundTrip = (v == "🚤 Boat Cruise (นั่งเรือกลับตลาด)")
 end)
 
@@ -8815,100 +8494,34 @@ end
 Modules.initEventTab()
 
 function Modules.initTeleportTab()
-Tabs.Teleport:AddSection("⚙️ การตั้งค่าโหมดการเคลื่อนย้าย (Teleport Mode)")
-Tabs.Teleport:AddToggle("InstantTeleportMode", {
-    Title = "⚡ โหมดวาร์ปพริบตา (Instant CFrame Teleport)",
-    Description = "เปิด = วาร์ปถึงจุดหมายทันทีในเฟรมเดียว | ปิด = เดิน/ร่อนตามพื้นดินปลอดภัย (15.2 studs/s ป้องกันเตะ)",
-    Default = false
-}):OnChanged(function(v) CFG.InstantTeleport = v end)
+Tabs.Teleport:AddSection("🚤 ระบบนำทางเรืออัตโนมัติ (Boat Navigation Only · ไร้ Error 267)")
+Tabs.Teleport:AddButton({
+    Title = "🛑 หยุดเรือ / ยกเลิกการเดินทางทันที",
+    Callback = function() Modules.cancelBoatTravel() end
+})
 
 local function travelTo(targetCF, name)
     task.spawn(function()
         if not getMyHRP() then return end
         name = name or "จุดหมาย"
-
-        if CFG.useGamepassWarp then
-            local destId = boatNav.mapTargetToWarpDest(targetCF, name)
-            if destId then
-                local warpOk, warpReason, rem = boatNav.tryGamepassWarp(destId, 3.5)
-                if warpOk then
-                    notify({ Title = "⚡ วาร์ปเกมพาสสำเร็จ!", Content = "วาร์ปถึงโซน " .. tostring(destId) .. " เรียบร้อย (ไร้ Error 267)", Duration = 3 })
-                    task.wait(0.20)
-                    local curHrp = getMyHRP()
-                    local distToGoal = curHrp and (curHrp.Position - targetCF.Position).Magnitude or 0
-                    if distToGoal <= 45.0 then
-                        safeGlideTo(targetCF, 14.0)
-                        zeroVelocity(curHrp)
-                        return
-                    end
-                elseif warpReason == "cooldown" then
-                    notify({ Title = "⏳ วาร์ปติดคูลดาวน์", Content = string.format("เหลืออีก %d วิ สลับไปใช้การเดินทางปกติอัตโนมัติ", math.ceil(rem)), Duration = 3 })
+        runExclusive("teleport", function()
+            local hrp = getMyHRP()
+            if not hrp then return end
+            sendReel(0, true)
+            setSteer(0, true)
+            pcall(function() Input:FireServer("cancel") end)
+            notify({ Title = "🚤 กำลังเดินทาง...", Content = "กำลังล่องเรือไปยัง " .. name .. " (ปลอดภัย 100%)", Duration = 3 })
+            local success = pilotBoatOrWalkRaw(targetCF, name)
+            zeroVelocity(getMyHRP())
+            if success then
+                if (targetCF.Position - VENDOR_COORDINATES.sell.stand).Magnitude > 25.0 then
+                    RUNTIME.lastFishingSpotCF = targetCF
                 end
+                notify({ Title = "✅ ถึงจุดหมายแล้ว!", Content = name, Duration = 2.5 })
             end
-        end
-
-        if CFG.InstantTeleport then
-            local ok = safeWarpToCFrame(targetCF, { mode = "teleport", equipRod = false })
-            if ok then
-                notify({ Title = "⚡ วาร์ปปลอดภัยสำเร็จ!", Content = "ถึง " .. name .. " เรียบร้อย (ไร้เตะ/ไร้ติดเก้าอี้)", Duration = 2.5 })
-            else
-                notify({ Title = "⚠️ ยังวาร์ปไม่ได้", Content = "กำลังสู้ปลาหรือติดสถานะอื่นอยู่ รอเสร็จแล้วลองใหม่", Duration = 3 })
-            end
-        else
-            runExclusive("teleport", function()
-                local hrp = getMyHRP()
-                if not hrp then return end
-                sendReel(0, true)
-                setSteer(0, true)
-                pcall(function() Input:FireServer("cancel") end)
-                notify({ Title = "🚤 กำลังเดินทาง...", Content = "กำลังล่องเรือไปยัง " .. name .. " (ปลอดภัย)", Duration = 3 })
-                local success = pilotBoatOrWalkRaw(targetCF, name)
-                zeroVelocity(getMyHRP())
-                if success then
-                    if (targetCF.Position - VENDOR_COORDINATES.sell.stand).Magnitude > 25.0 then
-                        RUNTIME.lastFishingSpotCF = targetCF
-                    end
-                    notify({ Title = "✅ ถึงจุดหมายแล้ว!", Content = name, Duration = 2.5 })
-                end
-            end)
-        end
+        end)
     end)
 end
-
-Tabs.Teleport:AddSection("⚡ จุดวาร์ปเกมพาส (Fast Travel Perk · Pass_warp)")
-Tabs.Teleport:AddToggle("UseGamepassWarpToggle", {
-    Title = "เปิดใช้วาร์ปเกมพาสอัตโนมัติ (Use Gamepass Warp)",
-    Description = "ใช้วาร์ปเซิร์ฟเวอร์ก่อนล่องเรือเมื่อมีสิทธิ์และไม่ติดคูลดาวน์",
-    Default = true
-}):OnChanged(function(v) CFG.useGamepassWarp = v end)
-
-local function addWarpButton(title, desc, destId)
-    Tabs.Teleport:AddButton({
-        Title = title,
-        Description = desc,
-        Callback = function()
-            task.spawn(function()
-                local ok, reason, rem = boatNav.tryGamepassWarp(destId, 3.5)
-                if ok then
-                    notify({ Title = "⚡ วาร์ปสำเร็จ!", Content = "ถึงจุดหมาย " .. destId .. " เรียบร้อย", Duration = 3 })
-                elseif reason == "cooldown" then
-                    notify({ Title = "⏳ วาร์ปติดคูลดาวน์", Content = string.format("เหลืออีก %d วินาที", math.ceil(rem)), Duration = 3 })
-                elseif reason == "no_pass" then
-                    notify({ Title = "⚠️ ไม่มีเกมพาส Pass_warp", Content = "ต้องมีเกมพาสจุดวาร์ปก่อนใช้งาน", Duration = 3 })
-                else
-                    notify({ Title = "⚠️ ไม่สำเร็จ", Content = tostring(reason), Duration = 3 })
-                end
-            end)
-        end
-    })
-end
-
-addWarpButton("🏛️ ลานเมือง & ตลาด (Plaza)", "วาร์ปตรงเข้าสู่ใจกลางเมือง ลานตลาด และโซนร้านค้า", "plaza")
-addWarpButton("🏡 บ้านของตนเอง (Home)", "วาร์ปกลับบ่อดินและบ้านส่วนตัวของตนเองทันที", "home")
-addWarpButton("🌊 อ่างเก็บน้ำ / เขื่อน (Reservoir)", "วาร์ปขึ้นสู่โซนเขื่อนและอ่างเก็บน้ำด้านบน", "reservoir")
-addWarpButton("🏞️ ต้นน้ำ / แก่งหิน (Upstream)", "วาร์ปสู่ต้นน้ำ ลำธารภูเขา และแก่งหินน้ำไหลเชี่ยว", "upstream")
-addWarpButton("🌿 ป่าชายเลน (Mangrove)", "วาร์ปสู่โซนป่าโกงกางและหนองน้ำชายเลน", "mangrove")
-addWarpButton("🌊 แม่น้ำใหญ่ / ปากอ่าว (River)", "วาร์ปสู่ร่องน้ำแม่น้ำสายใหญ่และแนวหาดทราย", "river")
 
 Tabs.Teleport:AddSection("🏪 ตลาด ร้านค้า & NPC สำคัญ (Market & Shops)")
 Tabs.Teleport:AddButton({
@@ -8962,18 +8575,14 @@ Tabs.Teleport:AddButton({
 Tabs.Teleport:AddSection("🏡 บ้านส่วนตัว & จุดสำคัญในเมือง (Home & City Utilities)")
 Tabs.Teleport:AddButton({
     Title = "🏡 บ่อปลา & บ้านของตนเอง (My Plot Pond & Home)",
-    Description = "วาร์ปกลับบ่อดินและตู้ปลาที่บ้านของตนเองทันที",
+    Description = "ล่องเรือกลับบ่อดินและตู้ปลาที่บ้านของตนเองอัตโนมัติ (แก้บัค Folder GetPivot แล้ว)",
     Callback = function()
         local myPlot = lp:GetAttribute("Plot")
-        local plots = workspace:FindFirstChild("Town") and workspace.Town:FindFirstChild("Plots")
-        local plotFolder = (myPlot and plots) and (plots:FindFirstChild("Plot" .. tostring(myPlot)) or plots:FindFirstChild(tostring(myPlot)))
-        if plotFolder then
-            local shop = plotFolder:FindFirstChild("Shop")
-            local partSafe = shop and shop:FindFirstChild("Part_safe")
-            local targetPos = partSafe and partSafe:GetPivot().Position or plotFolder:GetPivot().Position
-            travelTo(CFrame.new(targetPos + Vector3.new(0, 3.5, 0)), "บ้านของฉัน (" .. tostring(myPlot) .. ")")
+        local targetPos = Modules.getMyHomePos()
+        if targetPos then
+            travelTo(CFrame.new(targetPos + Vector3.new(0, 3.0, 0)), "บ้านของฉัน (" .. tostring(myPlot or "?") .. ")")
         else
-            notify({ Title = "วาร์ปบ้าน", Content = "ยังไม่ได้ครอบครองที่ดินหรือหาพิกัดบ้านไม่พบ", Duration = 3 })
+            notify({ Title = "กลับบ้าน", Content = "ยังไม่ได้ครอบครองที่ดินหรือหาพิกัดบ้านไม่พบ", Duration = 3 })
         end
     end
 })
@@ -9093,29 +8702,30 @@ Tabs.Automation:AddDropdown("BuyBoatSelect", {
     Values = { "เรือหางยาว Longtail ($5,000)", "เรือพาย Rowboat ($2,500)" },
     Multi = false, Default = "เรือหางยาว Longtail ($5,000)"
 }):OnChanged(function(v) selectedBoatToBuy = v:find("Rowboat") and "rowboat" or "longtail" end)
-Tabs.Automation:AddButton({ Title = "🛒 ซื้อเรือที่เลือก", Callback = function() task.spawn(remoteBuyBoat, selectedBoatToBuy) end })
+Tabs.Automation:AddButton({ Title = "🛒 ซื้อเรือที่เลือก", Callback = function() task.spawn(remoteBuyItem, "boats", "boat:" .. selectedBoatToBuy) end })
 
-Tabs.Automation:AddSection("🛡️ เฝ้าบ่อดิน ตีขโมย & เก็บเงินเช้า (Pond Guard)")
-Tabs.Automation:AddToggle("PondGuardMaster", { Title = "เปิดระบบเฝ้าบ่อดิน 24 ชม.", Default = false }):OnChanged(function(v) CFG.PondGuard = v end)
-Tabs.Automation:AddToggle("AutoBeatThieves", { Title = "🏏 ตีขโมยอัตโนมัติเมื่อเข้าใกล้บ่อ", Default = true }):OnChanged(function(v) CFG.AutoBeatThieves = v end)
+Tabs.Automation:AddSection("🛡️ เฝ้าบ้าน ป้องกันบ่อดิน + ตู้ปลาข้างนอก & ตีโจรเข้าคุก")
+Tabs.Automation:AddToggle("NightHomeDefenseToggle", {
+    Title = "🌙 กันบ้านอัตโนมัติตอนกลางคืน (18:20 กลับบ้าน → เช้ากลับหมายเดิม)",
+    Description = "ไม่ว่าจะตกปลาอยู่ที่ไหน พอใกล้ค่ำจะเก็บเบ็ดล่องเรือกลับบ้านเฝ้าบ่อดินและตู้ปลาข้างนอกจนเช้า แล้วล่องเรือกลับหมายเดิมอัตโนมัติ",
+    Default = false
+}):OnChanged(function(v) CFG.NightHomeDefense = v end)
+Tabs.Automation:AddToggle("PondGuardMaster", { Title = "เปิดระบบเฝ้าบ่อ & ตู้ปลาข้างนอก 24 ชม.", Default = false }):OnChanged(function(v) CFG.PondGuard = v end)
+Tabs.Automation:AddToggle("AutoBeatThieves", { Title = "🏏 ตีโจรอัตโนมัติจนเข้าคุก (3 ที)", Default = true }):OnChanged(function(v) CFG.AutoBeatThieves = v end)
 Tabs.Automation:AddToggle("AutoMorningCollect", { Title = "🌅 เก็บเงินบ่อดินยามเช้าอัตโนมัติ", Default = true }):OnChanged(function(v) CFG.AutoMorningCollect = v end)
 Tabs.Automation:AddToggle("AutoFeedPond", { Title = "🐟 ให้อาหารปลาบ่อดินอัตโนมัติ", Default = true }):OnChanged(function(v) CFG.AutoFeedPond = v end)
-Tabs.Automation:AddSlider("PondGuardRange", { Title = "ระยะตรวจจับรอบบ่อ (สตัด)", Default = 35, Min = 15, Max = 60, Rounding = 0 }):OnChanged(function(v) CFG.PondGuardRange = v end)
-Tabs.Automation:AddToggle("ReturnToGuardPost", { Title = "เดินกลับจุดเฝ้าบ่อหลังเสร็จภารกิจ", Default = true }):OnChanged(function(v) CFG.ReturnToGuardPost = v end)
+Tabs.Automation:AddSlider("PondGuardRange", { Title = "ระยะตรวจจับรอบบ่อและตู้ปลา (สตัด)", Default = 35, Min = 15, Max = 60, Rounding = 0 }):OnChanged(function(v) CFG.PondGuardRange = v end)
+Tabs.Automation:AddToggle("ReturnToGuardPost", { Title = "เดินกลับจุดเฝ้าบ้านหลังไล่โจรเสร็จ", Default = true }):OnChanged(function(v) CFG.ReturnToGuardPost = v end)
 Tabs.Automation:AddButton({
-    Title = "📍 ไปจุดเฝ้าบ่อดินทันที",
+    Title = "📍 ล่องเรือไปจุดเฝ้าบ้านทันที",
     Callback = function()
         task.spawn(function()
             local geo = resolvePondGeometry(lp:GetAttribute("Plot"))
             if geo and geo.guardStandCF then
-                if CFG.InstantTeleport then
-                    safeWarpToCFrame(geo.guardStandCF, { mode = "teleport", equipRod = false })
-                else
-                    safeGlideTo(geo.guardStandCF, 14.0)
-                end
-                notify({ Title = "🛡️ ถึงจุดเฝ้าบ่อดิน", Content = "ประจำตำแหน่งเรียบร้อย", Duration = 3 })
+                Modules.boatAutoTravelTo(geo.guardStandCF, "จุดเฝ้าบ้าน")
+                notify({ Title = "🛡️ ถึงจุดเฝ้าบ้าน", Content = "ประจำตำแหน่งเรียบร้อย", Duration = 3 })
             else
-                notify({ Title = "⚠️ ไม่พบบ่อดิน", Content = "กรุณาสร้างบ่อดินที่บ้านก่อน", Duration = 3 })
+                notify({ Title = "⚠️ ไม่พบพิกัดบ้าน/บ่อดิน", Content = "กรุณาครอบครองที่ดินก่อน", Duration = 3 })
             end
         end)
     end
@@ -9322,18 +8932,21 @@ task.spawn(function()
         local ls = lp:FindFirstChild("leaderstats")
         local mVal = ls and ls:FindFirstChild("เงิน")
         local money = mVal and mVal.Value or 0
-        if pEconomy then
-            RUNTIME.pEconomy:SetDesc(string.format("เหรียญ: $%s | ถังปลา: %d/%d ตัว | ตกได้รอบนี้: %d ตัว",
-                formatNumber(money), lp:GetAttribute("BucketN") or 0, getBucketCap(), RUNTIME.totalCatches or 0))
+        if RUNTIME.pEconomy then
+            local o2Chg = tonumber(lp:GetAttribute("O2Charge")) or 0
+            local o2Cap = math.max(1, tonumber(lp:GetAttribute("O2Cap")) or 1)
+            local o2Pct = math.floor(math.clamp(o2Chg / o2Cap, 0, 1) * 100 + 0.5)
+            RUNTIME.pEconomy:SetDesc(string.format("เหรียญ: $%s | ถังปลา: %d/%d ตัว | O2: %d%% | ตกได้: %d ตัว",
+                formatNumber(money), lp:GetAttribute("BucketN") or 0, getBucketCap(), o2Pct, RUNTIME.totalCatches or 0))
         end
 
-        if loyPointsLabel and RUNTIME.loyStateData then
-            loyPointsLabel:SetDesc(string.format("%d แต้ม", RUNTIME.loyStateData.pts or 0))
+        if RUNTIME.loyPointsLabel and RUNTIME.loyStateData then
+            RUNTIME.loyPointsLabel:SetDesc(string.format("%d แต้ม", RUNTIME.loyStateData.pts or 0))
         end
-        if loyBaitLabel and RUNTIME.loyStateData then
-            loyBaitLabel:SetDesc(string.format("%d ชิ้น", RUNTIME.loyStateData.bait or 0))
+        if RUNTIME.loyBaitLabel and RUNTIME.loyStateData then
+            RUNTIME.loyBaitLabel:SetDesc(string.format("%d ชิ้น", RUNTIME.loyStateData.bait or 0))
         end
-        if loyBuffLabel and RUNTIME.loyStateData then
+        if RUNTIME.loyBuffLabel and RUNTIME.loyStateData then
             local rem = math.max(0, math.floor((RUNTIME.loyBuffUntil or 0) - os.clock()))
             RUNTIME.loyBuffLabel:SetDesc(rem > 0 and string.format("🟢 บัฟทำงานอยู่ (+1.5x โชค, เหลือ %d วิ)", rem) or "⚪ ไม่มีบัฟทำงาน")
         end
@@ -9375,7 +8988,7 @@ RUNTIME.boatNearLineFn = nil
     RUNTIME.adriftModel = nil
     table.clear(RUNTIME.recentAdriftCandidates)
     if RUNTIME.starredUids then table.clear(RUNTIME.starredUids) end
-    clearFlashPad()
+    boatNav._rpSolid, boatNav._rpBoat, boatNav._rpChar, boatNav._rpAt = nil, nil, nil, 0
     table.clear(uiControllerCache)
     table.clear(RUNTIME.activeRemoteUIs)
     table.clear(RUNTIME.spectatorTimers)
@@ -9473,7 +9086,7 @@ end)
 syncGameLanguage()
 Fluent:SetTheme(InterfaceManager.Settings.Theme or "Amethyst")
 Window:SelectTab(1)
-notify({ Title = "ZeluxHub v4.0 โหลดสำเร็จ!", Content = "Precision Economy & Teleport Engine พร้อมใช้งาน", Duration = 5 })
+notify({ Title = "ZeluxHub v4.1 โหลดสำเร็จ!", Content = "Precision Economy & Teleport Engine พร้อมใช้งาน", Duration = 5 })
 pcall(function() SaveManager:LoadAutoloadConfig() end)
 local liveStartLure = getLiveGameLure()
 if liveStartLure then
