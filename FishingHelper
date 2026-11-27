@@ -1,5 +1,5 @@
 --[[
-    River Hunter · HunterSuite v5.2 (Full 24/7 AFK Certified: Syntax Fix, Respawn Auto-Resume, Dual-Layer Anti-AFK, Bulletproof Defense Recovery & Starred-Bucket Guard)
+    River Hunter · HunterSuite v5.4 (100% Deep-Audit Certified: Pond Robbed Hook, LastSpot Protection, RoundTrip Race-Fix, Morning Guard Flag, Geo Cache & Safe Siren Filter)
     - Event Fish Fast-Path & Map System Exploit: Spatial Anchor Platform + Instant Ghostfang Intercept + Red Water Goliath Farm + Zone Spoofer
     - Full-System Economy Exploitation (Module 12): Cross-Plot Pond Fish Siphoning, Aerial Police Evasion, Dex Bounty Sweep, Remote Vendor Liquidation
     - Fix Fish Stall Sell (shop.far): Live prompt stand CFrame (-18.00, 6.50, 8.80) + server sync + 3x retry
@@ -56,7 +56,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
 local Window = Fluent:CreateWindow({
-    Title = "ZeluxHub v5.2",
+    Title = "ZeluxHub v5.4",
     SubTitle = "ZeluxHub-River Hunter · Precision Economy, Loy Krathong Event & Auto Suite",
     TabWidth = 165,
     Size = UDim2.fromOffset(620, 520),
@@ -1141,8 +1141,8 @@ CFG = {
     PondGuard = true,
     NightHomeDefense = false,
     AutoBeatThieves = true,
-    BeatPlotIntruders = true,
-    Intruder24hMode = true,
+    BeatPlotIntruders = false,
+    Intruder24hMode = false,
     AutoRecallOnTheft = true,
     ThiefESP = true,
     AutoMorningCollect = true,
@@ -4737,7 +4737,8 @@ doAutoCast = function()
 
     if now - RUNTIME.lastCastAt < (CFG.CastCooldown or 1.5) then return end
 
-    if hrp and (hrp.Position - VENDOR_COORDINATES.sell.stand).Magnitude > 25.0 then
+    if hrp and (hrp.Position - VENDOR_COORDINATES.sell.stand).Magnitude > 25.0
+        and not (Modules.isPosInsideMyPlot and Modules.isPosInsideMyPlot(hrp.Position, 45)) then
         RUNTIME.lastFishingSpotCF = hrp.CFrame
     end
 
@@ -5601,7 +5602,7 @@ table.insert(RUNTIME.connections, State.OnClientEvent:Connect(function(ev, d)
     elseif ev == "siren" then
         if Modules.onHomeDefenseSignal then pcall(Modules.onHomeDefenseSignal, "siren", d) end
     elseif (ev == "notice" or ev == "toast" or ev == "announce") and typeof(d) == "table" and typeof(d.k) == "string"
-        and (d.k:find("theft.", 1, true) or d.k:find("thief.", 1, true)) then
+        and (d.k:find("theft.", 1, true) or d.k:find("thief.", 1, true) or d.k == "pond.robbed" or d.k == "pond.robbedCash") then
         if Modules.onHomeDefenseSignal then pcall(Modules.onHomeDefenseSignal, ev, d) end
     elseif (ev == "announce" or ev == "notice" or ev == "balert") and typeof(d) == "table" and (d.k == "announce.outBoss" or d.boss ~= nil) then
         if Modules.onBossEvent then Modules.onBossEvent(ev, d) end
@@ -5823,7 +5824,7 @@ table.insert(RUNTIME.connections, lp.CharacterAdded:Connect(function(char)
     RUNTIME.busySince = 0
     RUNTIME.cancelTravelRequested = false
     RUNTIME.isSelling, RUNTIME.isBridging, RUNTIME.isPilotingBoat, RUNTIME.isDrivingMoto = false, false, false, false
-    RUNTIME.isDefendingPond, RUNTIME.isRecallingForTheft, RUNTIME.isReturningHomeForNight = false, false, false
+    RUNTIME.isDefendingPond, RUNTIME.isRecallingForTheft, RUNTIME.isReturningHomeForNight, RUNTIME.isReturningFromNightGuard = false, false, false, false
     RUNTIME.motoRail = nil
     RUNTIME.motoAutoCtrl = nil
     RUNTIME.boatAutoTarget = nil
@@ -7219,7 +7220,8 @@ function Modules.boatAutoTravelTo(targetCF, spotName, opts)
             task.wait(0.2)
         end
         local success = pilotBoatOrWalkRaw(targetCF, spotName)
-        if success and (targetCF.Position - VENDOR_COORDINATES.sell.stand).Magnitude > 25.0 then
+        local isHomeDest = Modules.isPosInsideMyPlot and Modules.isPosInsideMyPlot(targetCF.Position, 45)
+        if success and not opts.preserveSpot and not isHomeDest and (targetCF.Position - VENDOR_COORDINATES.sell.stand).Magnitude > 25.0 then
             RUNTIME.lastFishingSpotCF = targetCF
         end
         return success
@@ -7376,15 +7378,18 @@ function Modules.executeBoatMarketRoundTrip()
         return true
     end)
 
-    CFG.AutoFish = (prevAutoFish == true)
-    if ok and res then
-        if resumeFishingAfterWarp then
-            resumeFishingAfterWarp(RUNTIME.lastFishingSpotCF)
-        else
-            ensureRodEquipped()
-            RUNTIME.lastCastAt = 0
+    local homeDefTakingOver = RUNTIME.isRecallingForTheft or RUNTIME.isGuardingHomeAtNight or RUNTIME.isReturningHomeForNight or RUNTIME.isDefendingPond
+    if not homeDefTakingOver then
+        CFG.AutoFish = (prevAutoFish == true)
+        if ok and res then
+            if resumeFishingAfterWarp then
+                resumeFishingAfterWarp(RUNTIME.lastFishingSpotCF)
+            else
+                ensureRodEquipped()
+                RUNTIME.lastCastAt = 0
+            end
+            notify({ Title = "🎯 กลับถึงหมายเดิมแล้ว", Content = "กลับมาประจำจุดเดิมและตกปลาต่ออัตโนมัติ!", Duration = 4 })
         end
-        notify({ Title = "🎯 กลับถึงหมายเดิมแล้ว", Content = "กลับมาประจำจุดเดิมและตกปลาต่ออัตโนมัติ!", Duration = 4 })
     end
     return ok and res == true
 end
@@ -7741,9 +7746,14 @@ local function isPosInPoliceJail(pos)
     return pos.X >= -146 and pos.X <= -94 and pos.Z >= -214 and pos.Z <= -169
 end
 
-local function resolvePondGeometry(myPlotId)
+local function resolvePondGeometry(myPlotId, forceRefresh)
     myPlotId = tonumber(myPlotId or lp:GetAttribute("Plot"))
     if not myPlotId then return nil end
+    local nowG = os.clock()
+    if not forceRefresh and RUNTIME._cachedPondGeo and RUNTIME._cachedPondGeo.plotId == myPlotId
+        and (nowG - (RUNTIME._cachedPondGeoAt or 0)) < 3.0 then
+        return RUNTIME._cachedPondGeo
+    end
 
     local pondTank, cashPrompt, pondCenter, cashPos, housePos = nil, nil, nil, nil, nil
     local defendedSpots, seenInst = {}, {}
@@ -7817,7 +7827,7 @@ local function resolvePondGeometry(myPlotId)
         or (housePos and CFrame.lookAt(housePos + Vector3.new(0, 2.0, -6), homeCenter)
         or CFrame.lookAt(homeCenter + Vector3.new(0, 3.0, -8), homeCenter))
 
-    return {
+    local geoRes = {
         plotId = myPlotId,
         plotRec = pRec,
         pondTank = pondTank,
@@ -7828,9 +7838,35 @@ local function resolvePondGeometry(myPlotId)
         defendedSpots = defendedSpots,
         guardStandCF = guardStandCF
     }
+    RUNTIME._cachedPondGeo = geoRes
+    RUNTIME._cachedPondGeoAt = os.clock()
+    return geoRes
 end
 
--- สแกนหาภัยคุกคามที่มีความสำคัญสูงสุดรอบบ้าน / ทั้งเซิร์ฟเวอร์ (ถ้าขโมยของจากบ้านเรา)
+-- ตรวจจับว่าผู้เล่นคนนี้ "กำลังแงะกุญแจตู้ปลาของบ้านเราอยู่จริงๆ" (อ้างอิง Attribute แท้ของเกม: PickUntil & PickAt บน Character)
+local function isPlayerLockpickingMyHome(plr, geo)
+    if not (plr and plr ~= lp and plr.Character and geo) then return false end
+    local char = plr.Character
+    local pickUntil = char:GetAttribute("PickUntil")
+    if typeof(pickUntil) ~= "number" or workspace:GetServerTimeNow() >= pickUntil then
+        return false
+    end
+    local pickAt = char:GetAttribute("PickAt")
+    local refPos = (typeof(pickAt) == "Vector3") and pickAt or (char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position)
+    if not refPos then return false end
+
+    if Modules.isPosInsideMyPlot(refPos, 14, geo.plotId) then
+        return true
+    end
+    for _, sp in ipairs(geo.defendedSpots or {}) do
+        if (refPos - sp.pos).Magnitude <= 24.0 then
+            return true
+        end
+    end
+    return false
+end
+
+-- สแกนหาภัยคุกคามที่มีความสำคัญสูงสุด (โหมดมาตรฐาน: ตีเฉพาะคนที่กำลังแงะกุญแจตู้ หรือขโมยปลาจริงๆ เท่านั้น ไม่ตีคนเดินผ่าน!)
 local function findBestHomeThreat(geo, isStealWindow, allowFarThief)
     if not geo then return nil, 0, "" end
     local maxRange = math.max(tonumber(CFG.PondGuardRange) or 50.0, 20.0)
@@ -7840,7 +7876,7 @@ local function findBestHomeThreat(geo, isStealWindow, allowFarThief)
         or (RUNTIME.petSpottedThiefId ~= nil and now < (RUNTIME.petSpottedUntil or 0))
     local spottedUid = petSpotUid or RUNTIME.petSpottedThiefId
     local sirenHot = now < (RUNTIME.sirenAlertUntil or 0)
-    local allowIntruderNow = (CFG.BeatPlotIntruders ~= false) and (isStealWindow or CFG.Intruder24hMode == true or sirenHot)
+    local allowPasserbyIntruder = (CFG.BeatPlotIntruders == true) and (isStealWindow or CFG.Intruder24hMode == true)
 
     local bestPlr, bestScore, bestReason = nil, 0, ""
 
@@ -7858,27 +7894,32 @@ local function findBestHomeThreat(geo, isStealWindow, allowFarThief)
                     end
                     local inPlot = Modules.isPosInsideMyPlot(pPos, 2, geo.plotId)
                     local isThiefFromMe = (plr:GetAttribute("ThiefFrom") == lp.UserId)
+                    local isPickingMe = isPlayerLockpickingMyHome(plr, geo)
                     local isThiefAny = (plr:GetAttribute("Thief") == true)
                     local isPetSpotted = (petSpotActive and spottedUid == plr.UserId)
 
                     local score, reason = 0, ""
                     if isThiefFromMe then
                         if allowFarThief or minSpotDist <= 420 then
-                            score = 1000 - math.min(minSpotDist * 0.1, 90)
+                            score = 1100 - math.min(minSpotDist * 0.1, 90)
                             reason = "ขโมยปลาจากบ้านคุณ!"
                         end
+                    elseif isPickingMe then
+                        score = 1050 - math.min(minSpotDist * 0.1, 90)
+                        reason = "กำลังแงะกุญแจตู้ปลาของคุณ!"
                     elseif isPetSpotted then
                         if allowFarThief or minSpotDist <= 320 then
-                            score = 900 - math.min(minSpotDist * 0.1, 90)
-                            reason = "สัตว์เลี้ยงเฝ้าบ้านแจ้งเตือน!"
+                            score = 920 - math.min(minSpotDist * 0.1, 90)
+                            reason = "สัตว์เลี้ยงเฝ้าบ้านจับโจรได้!"
                         end
                     elseif isThiefAny and (inPlot or minSpotDist <= 95.0) then
-                        score = 750 - math.min(minSpotDist * 0.2, 90)
-                        reason = "หัวขโมยอยู่ใกล้บ้าน!"
-                    elseif sirenHot and (inPlot or minSpotDist <= 85.0) then
-                        score = 650 - math.min(minSpotDist * 0.2, 90)
-                        reason = "ไซเรนดัง! กำลังสะเดาะกุญแจตู้!"
-                    elseif allowIntruderNow and (inPlot or minSpotDist <= maxRange) then
+                        score = 820 - math.min(minSpotDist * 0.2, 90)
+                        reason = "หัวขโมยถือปลาอยู่ใกล้บ้าน!"
+                    elseif sirenHot and minSpotDist <= 22.0 then
+                        -- ไซเรนดัง: จับเฉพาะคนที่ยืนประชิดตู้ปลา/บ่อ (<= 22 สตัด) เท่านั้น ไม่ตีคนเดินถนน!
+                        score = 720 - math.min(minSpotDist * 0.5, 50)
+                        reason = "ไซเรนดัง! กำลังแงะตู้ปลา!"
+                    elseif allowPasserbyIntruder and (inPlot or minSpotDist <= maxRange) then
                         score = 400 - math.min(minSpotDist, 120)
                         reason = inPlot and "บุกรุกเข้ามาในเขตบ้าน!" or "เข้าใกล้บ่อ/ตู้ปลา!"
                     end
@@ -7927,7 +7968,7 @@ function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
 
     notify({
         Title = "🚨 ระบบกันขโมยทำงาน! (Home Defense)",
-        Content = string.format("%s — เป้าหมาย: %s · กำลังถือไม้ไล่ตีจนเข้าคุก!", tostring(alertReason or "พบผู้บุกรุก"), intruderPlr.Name),
+        Content = string.format("%s — เป้าหมาย: %s · กำลังถือไม้ไล่ตีจนเข้าคุก!", tostring(alertReason or "พบหัวขโมย"), intruderPlr.Name),
         Duration = 4
     })
 
@@ -7962,7 +8003,9 @@ function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
 
         local wasConfirmedThief = (intruderPlr:GetAttribute("ThiefFrom") == lp.UserId)
             or (intruderPlr:GetAttribute("Thief") == true)
+            or isPlayerLockpickingMyHome(intruderPlr, geo)
             or (tonumber(lp:GetAttribute("PetSpot")) == intruderPlr.UserId)
+        local lastLockpickAt = isPlayerLockpickingMyHome(intruderPlr, geo) and chaseStart or 0
 
         while RUNTIME.alive and RUNTIME.isDefendingPond do
             local now = os.clock()
@@ -7992,39 +8035,43 @@ function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
                 break
             end
 
-            -- 2. เช็คสถานะโจรแบบเรียลไทม์
+            -- 2. เช็คสถานะโจร/คนแงะกุญแจแบบเรียลไทม์
             local isThiefFromMe = (intruderPlr:GetAttribute("ThiefFrom") == lp.UserId)
             local isThiefAny = (intruderPlr:GetAttribute("Thief") == true)
-            local isConfirmedThief = isThiefFromMe or isThiefAny or (tonumber(lp:GetAttribute("PetSpot")) == intruderPlr.UserId)
+            local isPickingNow = isPlayerLockpickingMyHome(intruderPlr, geo)
+            if isPickingNow then lastLockpickAt = now end
+            local isRecentPicker = (lastLockpickAt > 0 and (now - lastLockpickAt) <= 12.0)
+            local isConfirmedThief = isThiefFromMe or isThiefAny or isPickingNow or (tonumber(lp:GetAttribute("PetSpot")) == intruderPlr.UserId)
             if isConfirmedThief then wasConfirmedThief = true end
 
             local confirmedHits = tonumber(RUNTIME.confirmedHitMap[intruderPlr.Name]) or 0
-            if confirmedHits >= maxHitsNeeded and not isThiefAny then
+            if confirmedHits >= maxHitsNeeded and not isThiefAny and not isPickingNow then
                 caughtOrJailed = true
                 RUNTIME.thievesJailed = (RUNTIME.thievesJailed or 0) + 1
                 break
             end
 
-            -- 3. เงื่อนไขหยุดไล่: ถ้าเป็นโจรจริงไล่ได้สูงสุด 45 วิ / ถ้าแค่ผู้บุกรุกธรรมดาและวิ่งหนีออกจากเขตบ้านไปแล้วให้หยุดทันที
+            -- 3. เงื่อนไขหยุดไล่
             local elapsed = now - chaseStart
-            if isConfirmedThief then
-                if elapsed > 45.0 then break end
-                local distFromHome = geo and geo.pondCenter and (tp - geo.pondCenter).Magnitude or 0
-                if distFromHome > 520.0 then break end
+            local distFromHome = geo and geo.pondCenter and (tp - geo.pondCenter).Magnitude or 0
+            if isThiefFromMe or isThiefAny then
+                if elapsed > 45.0 or distFromHome > 520.0 then break end
+            elseif isPickingNow or isRecentPicker then
+                -- แงะกุญแจตู้แล้ววิ่งหนี: ไล่ฟาดต่อได้สูงสุด 15 วิ ตราบที่ยังอยู่ใกล้บ้าน (<= 140 สตัด)
+                if elapsed > 18.0 or distFromHome > 140.0 then break end
             else
                 if wasConfirmedThief and not isThiefAny and elapsed > 2.5 then
                     break
                 end
-                local stillInPlot = geo and Modules.isPosInsideMyPlot(tp, 18, geo.plotId)
-                local distFromHome = geo and geo.pondCenter and (tp - geo.pondCenter).Magnitude or 999
-                if not stillInPlot and distFromHome > ((CFG.PondGuardRange or 50) + 22) then
+                if not CFG.BeatPlotIntruders then
+                    -- โหมดตีเฉพาะคนแงะ/ขโมยจริง: ถ้าไม่ได้ขโมยและไม่ได้แงะแล้ว ให้เลิกไล่ทันที
+                    if elapsed > 4.0 and confirmedHits == 0 then break end
+                end
+                local stillInPlot = geo and Modules.isPosInsideMyPlot(tp, 14, geo.plotId)
+                if not stillInPlot and distFromHome > ((CFG.PondGuardRange or 50) + 20) then
                     break
                 end
-                local isNightSteal = (Lighting.ClockTime >= 18.85 or Lighting.ClockTime < 5.55)
-                if not isNightSteal and elapsed > 10.0 and confirmedHits == 0 then
-                    break
-                end
-                if elapsed > 24.0 then break end
+                if elapsed > 20.0 then break end
             end
 
             -- 4. ถือกะบอง/ไม้ตีติดมือตลอดเวลา
@@ -8033,7 +8080,7 @@ function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
                 Modules.ensureBatEquipped()
             end
 
-            -- 5. คำนวณจุดดักหน้าเป้าหมายแบบเรียลไทม์ (Predictive Intercept — แก้บั๊กไล่ตามหลังไม่ทัน!)
+            -- 5. คำนวณจุดดักหน้าเป้าหมายแบบเรียลไทม์ (Predictive Intercept)
             local myPos = hrp.Position
             local flatDelta = Vector3.new(tp.X - myPos.X, 0, tp.Z - myPos.Z)
             local flatDist = flatDelta.Magnitude
@@ -8045,7 +8092,6 @@ function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
             local toAim = Vector3.new(aimX - myPos.X, 0, aimZ - myPos.Z)
             local aimDist = toAim.Magnitude
 
-            -- คงระดับความสูงตามเป้าหมาย (tp.Y) ไม่ให้เด้งขึ้นหลังคาบ้านเวลาไล่ในตัวบ้าน!
             local terrainHit = workspace:Raycast(Vector3.new(myPos.X, tp.Y + 8, myPos.Z), Vector3.new(0, -24, 0), rpTerrain)
             local minGroundY = terrainHit and (terrainHit.Position.Y + 2.6) or 5.5
             local targetY = math.max(tp.Y, minGroundY)
@@ -8058,13 +8104,12 @@ function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
                 hrp.AssemblyLinearVelocity = Vector3.new(dir.X * chaseSpeed, 0, dir.Z * chaseSpeed)
                 hrp.AssemblyAngularVelocity = Vector3.zero
             else
-                -- จ่อติดตัวโจร หันหน้าตรงพร้อมฟาด!
                 local lockPos = Vector3.new(myPos.X, targetY, myPos.Z)
                 hrp.CFrame = CFrame.lookAt(lockPos, Vector3.new(tp.X, targetY, tp.Z))
                 zeroVelocity(hrp)
             end
 
-            -- 6. ฟาดไม้ตีทันทีที่อยู่ในระยะ 6.4 สตัด (ตรงคูลดาวน์ 0.70 วิ ของ FishingClient ไม่ยิงซ้ำซ้อน)
+            -- 6. ฟาดไม้ตีทันทีที่อยู่ในระยะ 6.4 สตัด (ตรงคูลดาวน์ 0.70 วิ ของเกม)
             if flatDist <= strikeRange and math.abs(hrp.Position.Y - tp.Y) <= 6.5 and (now - lastSwingAt) >= 0.72 then
                 lastSwingAt = now
                 Modules.ensureBatEquipped()
@@ -8093,7 +8138,7 @@ function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
 
     RUNTIME.isDefendingPond = false
     RUNTIME.defendingTargetName = nil
-    if not RUNTIME.isGuardingHomeAtNight and prevAutoFish and not RUNTIME.isRecallingForTheft then
+    if not RUNTIME.isGuardingHomeAtNight and prevAutoFish and not RUNTIME.isRecallingForTheft and not RUNTIME.isReturningHomeForNight then
         ensureRodEquipped()
         CFG.AutoFish = true
         if RUNTIME.phase == "idle" and not isBusy() then
@@ -8103,7 +8148,7 @@ function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
     return okCombat and caughtOrJailed
 end
 
--- ระบบรับสัญญาณขโมยแบบทันที (0ms latency): ไซเรน / สัตว์เลี้ยงแจ้งเตือน / ThiefFrom / การฟาดโดน
+-- ระบบรับสัญญาณขโมยแบบทันที (0ms latency): แงะกุญแจตู้ (PickUntil) / ไซเรน / สัตว์เลี้ยงแจ้งเตือน / ThiefFrom / การฟาดโดน
 function Modules.onHomeDefenseSignal(kind, data)
     local now = os.clock()
     if kind == "siren" then
@@ -8117,11 +8162,11 @@ function Modules.onHomeDefenseSignal(kind, data)
                 RUNTIME.confirmedHitMap[who] = hitN
             end
             return
-        elseif k == "theft.alarm" or k == "theft.robbed" or k == "theft.sirenYou" then
+        elseif k == "theft.alarm" or k == "theft.robbed" or k == "theft.sirenYou" or k == "pond.robbed" or k == "pond.robbedCash" then
             RUNTIME.sirenAlertUntil = now + 28.0
             notify({
-                Title = "🚨 แจ้งเตือนขโมยบุกบ้าน!",
-                Content = string.format("ตรวจพบเหตุ [%s] ที่บ้านของคุณ!", k),
+                Title = "🚨 แจ้งเตือนโจรแงะตู้/ขโมยปลา!",
+                Content = string.format("ตรวจพบเหตุ [%s]%s ที่บ้านของคุณ!", k, data.who and (" โดย " .. tostring(data.who)) or ""),
                 Duration = 5
             })
         else
@@ -8130,12 +8175,15 @@ function Modules.onHomeDefenseSignal(kind, data)
     elseif kind == "pet_spot" and typeof(data) == "number" then
         RUNTIME.petSpottedThiefId = data
         RUNTIME.petSpottedUntil = now + 15.0
+    elseif kind == "lockpick" and typeof(data) == "Instance" then
+        -- ตรวจพบคนกำลังแงะกุญแจตู้บ้านเราแบบ 0ms!
     elseif kind == "thief_attr" and typeof(data) == "Instance" then
         -- คนขโมยปลาจากบ้านเราโดยตรง
     end
 
     if not (CFG.PondGuard or CFG.NightHomeDefense or CFG.AutoBeatThieves) then return end
-    if RUNTIME.isDefendingPond or RUNTIME.isRecallingForTheft then return end
+    -- สำคัญมาก! หากกำลังเดินทางกลับบ้านเฝ้ากลางคืนอยู่แล้ว (isReturningHomeForNight) ห้ามยกเลิกเรือเพื่อเรียก Recall ซ้ำเด็ดขาด (แก้บั๊กวนกลับหมายแล้วกลับมาบ้านอีกรอบ 100%!)
+    if RUNTIME.isDefendingPond or RUNTIME.isRecallingForTheft or RUNTIME.isReturningHomeForNight then return end
     if (now - (RUNTIME.lastTheftAlertAt or 0)) < 2.0 then return end
     RUNTIME.lastTheftAlertAt = now
 
@@ -8148,6 +8196,16 @@ function Modules.onHomeDefenseSignal(kind, data)
         local targetPlr = (typeof(data) == "Instance" and data:IsA("Player")) and data or nil
         if not targetPlr and typeof(data) == "number" then
             targetPlr = Players:GetPlayerByUserId(data)
+        elseif not targetPlr and typeof(data) == "table" and typeof(data.who) == "string" and data.who ~= "" then
+            targetPlr = Players:FindFirstChild(data.who)
+            if not targetPlr then
+                for _, pl in ipairs(Players:GetPlayers()) do
+                    if pl ~= lp and (pl.Name == data.who or pl.DisplayName == data.who) then
+                        targetPlr = pl
+                        break
+                    end
+                end
+            end
         end
         if not targetPlr then
             targetPlr = select(1, findBestHomeThreat(geo, true, true))
@@ -8161,14 +8219,19 @@ function Modules.onHomeDefenseSignal(kind, data)
         if targetPlr and math.min(distHome, targetDistMe) <= 220.0 then
             if isBusy() then
                 RUNTIME.cancelTravelRequested = true
-                task.wait(0.20)
+                local wt = os.clock()
+                while isBusy() and (os.clock() - wt) < 1.5 do task.wait(0.08) end
             end
-            Modules.executePondDefenseCombat(targetPlr, geo, "สัญญาณเตือนขโมยแบบเรียลไทม์!")
+            local reasonTxt = (kind == "lockpick") and "กำลังแงะกุญแจตู้ปลาของคุณ!" or "สัญญาณเตือนโจรขโมยปลา!"
+            Modules.executePondDefenseCombat(targetPlr, geo, reasonTxt)
             return
         end
 
-        -- กรณีตกปลาอยู่ไกลบ้าน (> 220 สตัด) และเปิด AutoRecallOnTheft -> รีบกลับบ้านมาไล่ตีโจรเอาของคืนแล้วกลับหมายเดิม! (หุ้ม pcall กันล็อก AutoFish ถาวร 100%)
-        if CFG.AutoRecallOnTheft and (kind == "siren" or kind == "pet_spot" or kind == "thief_attr" or kind == "notice") then
+        -- กรณีตกปลาอยู่ไกลบ้าน (> 220 สตัด) และเปิด AutoRecallOnTheft -> รีบกลับบ้านมาไล่ตีโจรเอาของคืน!
+        -- หมายเหตุ: เสียงไซเรนดิบ (kind == "siren") จะสั่งกลับบ้านเฉพาะเมื่อยืนยันพบเป้าที่บ้านเราจริงเท่านั้น (กันไซเรนบ้านคนอื่นดึงเรากลับฟรี!)
+        local verifiedOwnerAlert = (kind == "pet_spot" or kind == "thief_attr" or kind == "lockpick" or kind == "notice" or kind == "toast" or kind == "announce")
+            or (kind == "siren" and targetPlr ~= nil)
+        if CFG.AutoRecallOnTheft and verifiedOwnerAlert then
             RUNTIME.isRecallingForTheft = true
             RUNTIME.recallTheftSince = os.clock()
             local savedCF = RUNTIME.lastFishingSpotCF or hrp.CFrame
@@ -8178,16 +8241,17 @@ function Modules.onHomeDefenseSignal(kind, data)
             pcall(function()
                 if Modules.recallAllRodsOnStop then Modules.recallAllRodsOnStop() end
                 notify({
-                    Title = "🚨 ฉุกเฉิน! มีโจรบุกบ้านขณะออกตกปลา",
+                    Title = "🚨 ฉุกเฉิน! มีโจรแงะตู้/ขโมยปลาที่บ้าน",
                     Content = "กำลังเร่งเดินทางกลับบ้านเพื่อไล่ตีโจรและทวงปลาคืน!",
                     Duration = 5
                 })
                 if isBusy() then
                     RUNTIME.cancelTravelRequested = true
-                    task.wait(0.35)
+                    local wt = os.clock()
+                    while isBusy() and (os.clock() - wt) < 2.0 do task.wait(0.10) end
                 end
 
-                local arrived = Modules.boatAutoTravelTo(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), "บ้านของฉัน (ฉุกเฉิน)")
+                local arrived = Modules.boatAutoTravelTo(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), "บ้านของฉัน (ฉุกเฉิน)", { preserveSpot = true })
                 if not arrived then
                     Modules.safeOverlandTravel(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), 22.0)
                 end
@@ -8204,7 +8268,23 @@ function Modules.onHomeDefenseSignal(kind, data)
                     end
                 end
 
-                if not RUNTIME.isGuardingHomeAtNight and savedCF then
+                -- เช็คเวลาปัจจุบันหลังเคลียร์โจรเสร็จ: ถ้าเข้าช่วงกลางคืนและเปิด NightHomeDefense อยู่ -> ปักหลักเฝ้าบ้านต่อเลย ห้ามวนกลับหมายตกปลาเด็ดขาด!
+                local isNightGuardWindow = CFG.NightHomeDefense and (Lighting.ClockTime >= 18.35 or Lighting.ClockTime < 5.55)
+                if isNightGuardWindow then
+                    RUNTIME.isGuardingHomeAtNight = true
+                    RUNTIME.preGuardAutoFish = savedAutoFish
+                    if not RUNTIME.preGuardFishingCF and savedCF then
+                        RUNTIME.preGuardFishingCF = savedCF
+                    end
+                    local g = resolvePondGeometry(myPlot) or geo
+                    if g and g.guardStandCF then safeGlideTo(g.guardStandCF, 18.0) end
+                    Modules.ensureBatEquipped()
+                    notify({
+                        Title = "🛡️ เคลียร์โจรเรียบร้อย · เฝ้าบ้านต่อจนเช้า",
+                        Content = "อยู่ในเวลาเฝ้าบ้านกลางคืนแล้ว จะไม่วนกลับหมายเดิม (05:35 น. ค่อยกลับไปตกต่อ)",
+                        Duration = 4
+                    })
+                elseif not RUNTIME.isGuardingHomeAtNight and savedCF then
                     local curH = getMyHRP()
                     if curH and (curH.Position - savedCF.Position).Magnitude > 45.0 then
                         notify({ Title = "🎣 เคลียร์โจรเรียบร้อย!", Content = "กำลังกลับไปตกปลาที่หมายเดิม...", Duration = 4 })
@@ -8224,10 +8304,24 @@ function Modules.onHomeDefenseSignal(kind, data)
     end)
 end
 
--- ติดตั้ง Event Listeners สำหรับตรวจจับโจรแบบ 0ms (ThiefFrom, Thief, PetSpot, PetEv)
+-- ติดตั้ง Event Listeners สำหรับตรวจจับโจรและคนแงะกุญแจตู้แบบ 0ms (PickUntil, PickAt, ThiefFrom, Thief, PetSpot, PetEv)
 function Modules.initHomeDefenseListeners()
     if RUNTIME._homeDefListenersInit then return end
     RUNTIME._homeDefListenersInit = true
+
+    local function bindCharacterPick(plr, char)
+        if not (plr and plr ~= lp and char) then return end
+        local function onPickChanged()
+            local pickUntil = char:GetAttribute("PickUntil")
+            if typeof(pickUntil) ~= "number" or workspace:GetServerTimeNow() >= pickUntil then return end
+            local geo = resolvePondGeometry(lp:GetAttribute("Plot"))
+            if geo and isPlayerLockpickingMyHome(plr, geo) then
+                Modules.onHomeDefenseSignal("lockpick", plr)
+            end
+        end
+        table.insert(RUNTIME.connections, char:GetAttributeChangedSignal("PickUntil"):Connect(onPickChanged))
+        table.insert(RUNTIME.connections, char:GetAttributeChangedSignal("PickAt"):Connect(onPickChanged))
+    end
 
     local function bindPlayer(plr)
         if plr == lp then return end
@@ -8241,6 +8335,12 @@ function Modules.initHomeDefenseListeners()
                 Modules.onHomeDefenseSignal("thief_attr", plr)
             end
         end))
+        table.insert(RUNTIME.connections, plr.CharacterAdded:Connect(function(ch)
+            bindCharacterPick(plr, ch)
+        end))
+        if plr.Character then
+            bindCharacterPick(plr, plr.Character)
+        end
     end
 
     for _, plr in ipairs(Players:GetPlayers()) do bindPlayer(plr) end
@@ -8266,7 +8366,7 @@ function Modules.initHomeDefenseListeners()
 end
 Modules.initHomeDefenseListeners()
 
--- แสดง ESP ไฮไลต์โจรและผู้บุกรุกในเขตบ้านแบบเรียลไทม์
+-- แสดง ESP ไฮไลต์เฉพาะโจรและคนแงะกุญแจตู้ (ไม่สแปมกรอบใส่คนเดินผ่านธรรมดา เว้นแต่เปิด BeatPlotIntruders)
 function Modules.renderThiefESP(now, playerPos)
     RUNTIME.thiefVisuals = RUNTIME.thiefVisuals or {}
     if not CFG.ThiefESP then
@@ -8282,6 +8382,7 @@ function Modules.renderThiefESP(now, playerPos)
     end
 
     local myPlot = tonumber(lp:GetAttribute("Plot"))
+    local geo = myPlot and resolvePondGeometry(myPlot) or nil
     local activeSet = {}
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= lp and plr.Character then
@@ -8289,9 +8390,10 @@ function Modules.renderThiefESP(now, playerPos)
             if pHrp then
                 local pPos = pHrp.Position
                 local isMyThief = (plr:GetAttribute("ThiefFrom") == lp.UserId)
+                local isPickingMe = geo and isPlayerLockpickingMyHome(plr, geo) or false
                 local isThief = (plr:GetAttribute("Thief") == true)
-                local inPlot = myPlot and Modules.isPosInsideMyPlot(pPos, 6, myPlot) or false
-                if (isMyThief or isThief or inPlot) and not isPosInPoliceJail(pPos) then
+                local inPlot = (CFG.BeatPlotIntruders == true) and myPlot and Modules.isPosInsideMyPlot(pPos, 2, myPlot) or false
+                if (isMyThief or isPickingMe or isThief or inPlot) and not isPosInPoliceJail(pPos) then
                     local uid = plr.UserId
                     activeSet[uid] = true
                     local v = RUNTIME.thiefVisuals[uid]
@@ -8302,17 +8404,17 @@ function Modules.renderThiefESP(now, playerPos)
                         local att = Instance.new("Attachment", pHrp)
                         local bb = Instance.new("BillboardGui", espFolder)
                         bb.Name = "ThiefESP_" .. tostring(uid)
-                        bb.Adornee, bb.Size, bb.StudsOffset, bb.MaxDistance, bb.AlwaysOnTop = att, UDim2.fromOffset(180, 44), Vector3.new(0, 4.2, 0), 4000, true
+                        bb.Adornee, bb.Size, bb.StudsOffset, bb.MaxDistance, bb.AlwaysOnTop = att, UDim2.fromOffset(188, 44), Vector3.new(0, 4.2, 0), 4000, true
                         local frame = Instance.new("Frame", bb)
                         frame.Size, frame.BackgroundColor3, frame.BackgroundTransparency, frame.BorderSizePixel = UDim2.fromScale(1, 1), Color3.fromRGB(35, 8, 12), 0.15, 0
                         Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
                         local st = Instance.new("UIStroke", frame)
-                        st.Thickness, st.Color = 2.0, isMyThief and Color3.fromRGB(255, 30, 50) or Color3.fromRGB(255, 160, 30)
+                        st.Thickness, st.Color = 2.0, (isMyThief or isPickingMe) and Color3.fromRGB(255, 30, 50) or Color3.fromRGB(255, 160, 30)
                         local lbl = Instance.new("TextLabel", frame)
                         lbl.Size, lbl.BackgroundTransparency, lbl.Font, lbl.TextSize, lbl.TextColor3 = UDim2.fromScale(1, 1), 1, Enum.Font.GothamBold, 11, Color3.new(1, 1, 1)
                         local hl = Instance.new("Highlight", plr.Character)
                         hl.Name = "HunterSuite_ThiefHL"
-                        hl.FillColor = isMyThief and Color3.fromRGB(255, 25, 45) or Color3.fromRGB(255, 150, 30)
+                        hl.FillColor = (isMyThief or isPickingMe) and Color3.fromRGB(255, 25, 45) or Color3.fromRGB(255, 150, 30)
                         hl.OutlineColor = Color3.new(1, 1, 1)
                         hl.FillTransparency = 0.45
                         hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
@@ -8320,7 +8422,7 @@ function Modules.renderThiefESP(now, playerPos)
                         RUNTIME.thiefVisuals[uid] = v
                     end
                     local dist = math.floor((pPos - playerPos).Magnitude)
-                    local tag = isMyThief and "🚨 โจรขโมยบ้านคุณ!" or (isThief and "⚠️ หัวขโมย" or "👀 บุกรุกเขตบ้าน!")
+                    local tag = isMyThief and "🚨 โจรขโมยบ้านคุณ!" or (isPickingMe and "🔒 กำลังแงะกุญแจตู้!" or (isThief and "⚠️ หัวขโมย" or "👀 บุกรุกเขตบ้าน!"))
                     v.label.Text = string.format("%s\n%s (%d ม.)", tag, plr.Name, dist)
                 end
             end
@@ -8341,7 +8443,7 @@ end
 
 function Modules.updatePondGuardEngine(now)
     if not (CFG.PondGuard or CFG.NightHomeDefense or CFG.AutoBeatThieves) then return end
-    if RUNTIME.isDefendingPond or RUNTIME.isRecallingForTheft then return end
+    if RUNTIME.isDefendingPond or RUNTIME.isRecallingForTheft or RUNTIME.isReturningHomeForNight then return end
     if isBusy() and RUNTIME.busyMode ~= "pondGuard" then return end
     if (now - (RUNTIME.lastPondGuardCheckAt or 0)) < 0.18 then return end
     RUNTIME.lastPondGuardCheckAt = now
@@ -8375,7 +8477,7 @@ function Modules.updatePondGuardEngine(now)
                             Content = "วางแผนเส้นทางข้ามโซนอัตโนมัติ (เรือ + มอเตอร์ไซค์/รถ A* หลบนา) กลับเฝ้าบ้าน",
                             Duration = 5
                         })
-                        arrived = Modules.boatAutoTravelTo(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), "บ้านของฉัน")
+                        arrived = Modules.boatAutoTravelTo(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), "บ้านของฉัน", { preserveSpot = true })
                         local curHrp = getMyHRP()
                         atHome = curHrp and (curHrp.Position - homePos).Magnitude <= 95.0
                         if not atHome and curHrp then
@@ -8391,8 +8493,15 @@ function Modules.updatePondGuardEngine(now)
                             local g = resolvePondGeometry(myPlot)
                             if g and g.guardStandCF then safeGlideTo(g.guardStandCF, 18.0) end
                             Modules.ensureBatEquipped()
+                            -- สแกนหาคนแงะกุญแจตู้หรือโจรทันทีที่ถึงบ้าน (เผื่อมีคนแงะระหว่างทางที่เรากำลังกลับมา!)
+                            if CFG.AutoBeatThieves and g then
+                                local th, _, rsn = findBestHomeThreat(g, true, true)
+                                if th then
+                                    task.spawn(Modules.executePondDefenseCombat, th, g, rsn)
+                                end
+                            end
                         end)
-                        notify({ Title = "🛡️ ถึงบ้านแล้ว · เฝ้าบ้านพร้อมตีโจร!", Content = "กำลังเฝ้าบ่อดินและตู้ปลาทุกใบในเขตบ้านจนถึง 05:35 น.", Duration = 4 })
+                        notify({ Title = "🛡️ ถึงบ้านแล้ว · เฝ้าบ้านพร้อมตีโจร!", Content = "เฝ้าจับเฉพาะคนแงะกุญแจตู้/ขโมยปลาจริงจนถึง 05:35 น.", Duration = 4 })
                     else
                         RUNTIME.isGuardingHomeAtNight = false
                         CFG.AutoFish = (RUNTIME.preGuardAutoFish ~= false)
@@ -8400,8 +8509,9 @@ function Modules.updatePondGuardEngine(now)
                 end)
                 return
             end
-        elseif isMorning and RUNTIME.isGuardingHomeAtNight then
+        elseif isMorning and RUNTIME.isGuardingHomeAtNight and not RUNTIME.isReturningFromNightGuard then
             RUNTIME.isGuardingHomeAtNight = false
+            RUNTIME.isReturningFromNightGuard = true
             task.spawn(function()
                 local backCF = RUNTIME.preGuardFishingCF or RUNTIME.lastFishingSpotCF
                 pcall(function()
@@ -8435,6 +8545,7 @@ function Modules.updatePondGuardEngine(now)
                         end
                     end
                 end)
+                RUNTIME.isReturningFromNightGuard = false
                 CFG.AutoFish = (RUNTIME.preGuardAutoFish ~= false)
                 resumeFishingAfterWarp(backCF)
             end)
@@ -8468,7 +8579,7 @@ function Modules.updatePondGuardEngine(now)
         RUNTIME.wasNight = true
     end
 
-    -- [SUB-ROUTINE 2]: ตรวจจับโจรและผู้บุกรุกทั้งเขตแปลงบ้าน 220x220 + ทุกตู้ปลา + บ่อดิน (สแกนทุก 0.18 วิ!)
+    -- [SUB-ROUTINE 2]: ตรวจจับเฉพาะคนแงะกุญแจตู้และโจรขโมยปลาจริง (สแกนทุก 0.18 วิ!)
     if CFG.AutoBeatThieves and (CFG.PondGuard or CFG.NightHomeDefense) then
         local distMeHome = (hrp.Position - geo.pondCenter).Magnitude
         local nearHome = (distMeHome <= 220.0) or Modules.isPosInsideMyPlot(hrp.Position, 45, myPlot)
@@ -8477,8 +8588,9 @@ function Modules.updatePondGuardEngine(now)
         if targetPlr then
             if nearHome then
                 task.spawn(Modules.executePondDefenseCombat, targetPlr, geo, reason)
-            elseif CFG.AutoRecallOnTheft and score >= 650 then
-                Modules.onHomeDefenseSignal("thief_attr", targetPlr)
+            elseif CFG.AutoRecallOnTheft and score >= 720 then
+                local sigKind = (score >= 1050 and score < 1100) and "lockpick" or "thief_attr"
+                Modules.onHomeDefenseSignal(sigKind, targetPlr)
             end
         end
     end
@@ -9411,7 +9523,7 @@ end
 task.spawn(function()
     while RUNTIME.alive do
         task.wait(2.5)
-        if LoyAsk and not isBusy() and not RUNTIME.isGuardingHomeAtNight and not RUNTIME.isReturningHomeForNight and not RUNTIME.isRecallingForTheft then
+        if LoyAsk and not isBusy() and not RUNTIME.isGuardingHomeAtNight and not RUNTIME.isReturningHomeForNight and not RUNTIME.isReturningFromNightGuard and not RUNTIME.isRecallingForTheft then
             local now = os.clock()
             local curPh = lp:GetAttribute("FishPhase") or RUNTIME.phase or "idle"
 
@@ -11214,13 +11326,13 @@ Tabs.Automation:AddToggle("AutoBeatThieves", {
     Default = true
 }):OnChanged(function(v) CFG.AutoBeatThieves = v end)
 Tabs.Automation:AddToggle("BeatPlotIntrudersToggle", {
-    Title = "⚡ ไล่ตีทันทีที่เดินเข้าเขตบ้าน (ไม่ต้องรอให้ขโมยก่อน)",
-    Description = "ตรวจจับทุกคนที่เหยียบเข้าแปลงบ้านของคุณ (220x220 สตัด) หรือเข้าใกล้ตู้ปลา/บ่อดิน",
-    Default = true
+    Title = "⚡ ไล่ตีคนเดินเข้าเขตบ้านด้วย (ปิด = ตีเฉพาะคนแงะกุญแจตู้/ขโมยปลาจริง)",
+    Description = "ค่าเริ่มต้นปิดไว้: จะไม่ไปตีคนเดินผ่าน จะตีเฉพาะคนที่แงะกุญแจตู้ (PickUntil), ขโมยปลา (ThiefFrom/Thief), ไซเรนดังข้างตู้ หรือสัตว์เลี้ยงจับได้เท่านั้น",
+    Default = false
 }):OnChanged(function(v) CFG.BeatPlotIntruders = v end)
 Tabs.Automation:AddToggle("Intruder24hModeToggle", {
-    Title = "🕒 ไล่ผู้บุกรุกในเขตบ้านตลอด 24 ชม. (ปิด = เฉพาะกลางคืน 18:45–05:35)",
-    Default = true
+    Title = "🕒 ไล่ผู้บุกรุกในเขตบ้านตลอด 24 ชม. (ใช้ร่วมกับปุ่มข้างบน)",
+    Default = false
 }):OnChanged(function(v) CFG.Intruder24hMode = v end)
 Tabs.Automation:AddToggle("AutoRecallOnTheftToggle", {
     Title = "🚀 วาร์ป/ขับรถกลับบ้านฉุกเฉินทันทีเมื่อมีโจรขโมยขณะออกตกปลา",
@@ -11530,6 +11642,9 @@ RUNTIME.boatNearLineFn = nil
     RUNTIME.isSiphoningPonds = false
     RUNTIME.isDefendingPond = false
     RUNTIME.isRecallingForTheft = false
+    RUNTIME.isReturningHomeForNight = false
+    RUNTIME.isReturningFromNightGuard = false
+    RUNTIME._cachedPondGeo = nil
     RUNTIME.motoRail = nil
     pcall(function() RunService:UnbindFromRenderStep("HunterSuite_MotoRail") end)
     RUNTIME.activeMove, RUNTIME.activeBoss, RUNTIME.bridgeStartedAt, RUNTIME.sellStartedAt = nil, nil, 0, 0
@@ -11642,7 +11757,7 @@ end)
 syncGameLanguage()
 Fluent:SetTheme(InterfaceManager.Settings.Theme or "Amethyst")
 Window:SelectTab(1)
-notify({ Title = "ZeluxHub v5.2 โหลดสำเร็จ!", Content = "Precision Economy & Teleport Engine พร้อมใช้งาน", Duration = 5 })
+notify({ Title = "ZeluxHub v5.4 โหลดสำเร็จ!", Content = "Precision Economy & Teleport Engine พร้อมใช้งาน", Duration = 5 })
 pcall(function() SaveManager:LoadAutoloadConfig() end)
 local liveStartLure = getLiveGameLure()
 if liveStartLure then
