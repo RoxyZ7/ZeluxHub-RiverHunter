@@ -39,7 +39,7 @@ end
 local SaveManager=loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager=loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 local Window=Fluent:CreateWindow({
-Title="ZeluxHub v5.4",
+Title="ZeluxHub v5.5",
 SubTitle="ZeluxHub-River Hunter · Precision Economy, Loy Krathong Event & Auto Suite",
 TabWidth=165,
 Size=UDim2.fromOffset(620,520),
@@ -2187,6 +2187,27 @@ end
 end
 return false
 end
+local function getNearestBridgeCenter(x,z,maxHalfWidth)
+local tp=boatNav.TownPlan
+if not(tp and typeof(tp.BRIDGES)=="table")then return nil end
+local halfW=maxHalfWidth or 12.0
+for _,br in ipairs(tp.BRIDGES)do
+if br.a and br.b then
+local ax,az,bx,bz=br.a[1],br.a[2],br.b[1],br.b[2]
+local vx,vz=bx-ax,bz-az
+local l2=vx*vx+vz*vz
+if l2>1 then
+local t=math.clamp(((x-ax)*vx+(z-az)*vz)/l2,0,1)
+local px,pz=ax+vx*t,az+vz*t
+local d2=(x-px)^2+(z-pz)^2
+if d2<=(halfW*halfW)then
+return Vector3.new(px,0,pz),br
+end
+end
+end
+end
+return nil
+end
 local function safeGlideTo(targetCFrame,speed,maxDist,keepSeatUnlocked)
 local hrp=getMyHRP()
 local hum=lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
@@ -2194,8 +2215,8 @@ if not hrp or not hum then return false end
 local targetPos=targetCFrame.Position
 local startPos=hrp.Position
 local flatDist0=(Vector3.new(targetPos.X-startPos.X,0,targetPos.Z-startPos.Z)).Magnitude
-if flatDist0<=2.0 then
-if(targetPos-startPos).Magnitude<=3.5 then
+if flatDist0<=2.2 then
+if(targetPos-startPos).Magnitude<=4.0 then
 hrp.CFrame=CFrame.new(targetPos.X,hrp.Position.Y,targetPos.Z)*targetCFrame.Rotation
 zeroVelocity(hrp)
 end
@@ -2223,17 +2244,28 @@ local rpTerrain=RaycastParams.new()
 rpTerrain.FilterDescendantsInstances={workspace.Terrain}
 rpTerrain.FilterType=Enum.RaycastFilterType.Include
 rpTerrain.IgnoreWater=false
+local rpTerrainSolid=RaycastParams.new()
+rpTerrainSolid.FilterDescendantsInstances={workspace.Terrain}
+rpTerrainSolid.FilterType=Enum.RaycastFilterType.Include
+rpTerrainSolid.IgnoreWater=true
 local function sampleFloorY(x,z,curY)
 local tHit=workspace:Raycast(Vector3.new(x,260,z),Vector3.new(0,-360,0),rpTerrain)
 local isWater=(tHit~=nil and tHit.Material==Enum.Material.Water)
 local floorY=tHit and(tHit.Position.Y+3.1)or math.max(curY or targetPos.Y,4.0)
-local origin=Vector3.new(x,math.min(floorY+11,(curY or floorY)+9),z)
-for _=1,3 do
-local pHit=workspace:Raycast(origin,Vector3.new(0,-24,0),rpGround)
+if isWater and tHit then
+local sHit=workspace:Raycast(Vector3.new(x,tHit.Position.Y+2,z),Vector3.new(0,-10,0),rpTerrainSolid)
+if sHit and(tHit.Position.Y-sHit.Position.Y)<=1.2 then
+floorY=math.max(sHit.Position.Y+3.1,tHit.Position.Y+2.6)
+isWater=false
+end
+end
+local origin=Vector3.new(x,math.min(floorY+12,(curY or floorY)+10),z)
+for _=1,4 do
+local pHit=workspace:Raycast(origin,Vector3.new(0,-26,0),rpGround)
 if not pHit or pHit.Instance==workspace.Terrain then break end
 if pHit.Instance:IsA("BasePart")and pHit.Instance.CanCollide and pHit.Normal.Y>=0.65 and not isTreeOrRoofCollider(pHit.Instance)then
 local partTop=pHit.Position.Y+3.0
-if partTop>=floorY-0.5 and partTop<=floorY+14.0 then
+if partTop>=floorY-0.8 and partTop<=floorY+16.0 then
 floorY=partTop
 isWater=false
 end
@@ -2244,73 +2276,7 @@ end
 end
 return floorY,isWater
 end
-local _,startInWater=sampleFloorY(startPos.X,startPos.Z,startPos.Y)
-local _,endInWater=sampleFloorY(targetPos.X,targetPos.Z,targetPos.Y)
-if flatDist0>14.0 and not startInWater and not endInWater then
-local savedWS=hum.WalkSpeed
-local walkSpd=math.clamp(speed or 24.0,16.0,25.0)
-local t0=os.clock()
-local maxTime=math.max((flatDist0/12.0)+10.0,14.0)
-local lastProgressPos=hrp.Position
-local lastProgressAt=t0
-local dodgeSign=1
-local dodgeUntil=0
-local reached=false
-pcall(function()
-while RUNTIME.alive and not RUNTIME.cancelTravelRequested and hrp.Parent and hum.Parent and hum.Health>0 do
-local now=os.clock()
-if(now-t0)>=maxTime then break end
-local p=hrp.Position
-local dx,dz=targetPos.X-p.X,targetPos.Z-p.Z
-local rem=math.sqrt(dx*dx+dz*dz)
-if rem<=3.2 then
-reached=true
-break
-end
-local inWaterNow=(hum:GetState()==Enum.HumanoidStateType.Swimming)
-local desiredWS=inWaterNow and 11.5 or walkSpd
-if math.abs(hum.WalkSpeed-desiredWS)>0.5 then
-hum.WalkSpeed=desiredWS
-end
-local dirX,dirZ=dx/rem,dz/rem
-local movePt
-if now<dodgeUntil then
-local perpX,perpZ=-dirZ*dodgeSign,dirX*dodgeSign
-movePt=Vector3.new(p.X+(dirX*0.45+perpX*0.90)*14,p.Y,p.Z+(dirZ*0.45+perpZ*0.90)*14)
-else
-local step=math.min(rem,22)
-movePt=Vector3.new(p.X+dirX*step,targetPos.Y,p.Z+dirZ*step)
-end
-hum:MoveTo(movePt)
-if(now-lastProgressAt)>=0.45 then
-local moved=(Vector3.new(p.X-lastProgressPos.X,0,p.Z-lastProgressPos.Z)).Magnitude
-lastProgressPos=p
-lastProgressAt=now
-if moved<2.2 then
-hum.Jump=true
-dodgeSign=-dodgeSign
-dodgeUntil=now+0.85
-end
-end
-RunService.Heartbeat:Wait()
-end
-end)
-if hum and hum.Parent then
-hum:MoveTo(hrp.Position)
-hum.WalkSpeed=(savedWS and savedWS>=16 and savedWS<=26)and savedWS or 16
-end
-if reached and hrp and hrp.Parent and(Vector3.new(targetPos.X-hrp.Position.X,0,targetPos.Z-hrp.Position.Z)).Magnitude<=4.0 then
-hrp.CFrame=CFrame.new(hrp.Position.X,hrp.Position.Y,hrp.Position.Z)*targetCFrame.Rotation
-zeroVelocity(hrp)
-end
-if not keepSeatUnlocked and hum and setAntiSeatLock then
-task.delay(0.35,function()
-if hum and hum.Parent then setAntiSeatLock(hum,false)end
-end)
-end
-return reached
-end
-local baseSpeed=math.clamp(speed or 14.0,8.0,17.5)
+local function phaseSlideToward(goalPos,durationSec,spdLimit,stopWhenDry)
 local noclipConn=RunService.Stepped:Connect(function()
 local ch=lp.Character
 if ch then
@@ -2321,55 +2287,238 @@ end
 end
 end
 end)
-local reached=false
-local ok=pcall(function()
+local reachedGoal=false
+local okSlide=pcall(function()
 local curPos=hrp.Position
 local lastT=os.clock()
-local maxDuration=math.max((flatDist0/math.min(baseSpeed,11.0))+6.0,8.0)
-local t0=lastT
-while RUNTIME.alive and not RUNTIME.cancelTravelRequested and hrp.Parent and(os.clock()-t0)<maxDuration do
+local tStart=lastT
+local maxT=durationSec or 2.0
+local maxSpd=math.clamp(spdLimit or 18.0,8.0,19.5)
+while RUNTIME.alive and not RUNTIME.cancelTravelRequested and hrp.Parent and hum.Parent and(os.clock()-tStart)<maxT do
 local now=os.clock()
 local dt=math.clamp(now-lastT,0.005,0.05)
 lastT=now
 local realPos=hrp.Position
-if(Vector3.new(realPos.X-curPos.X,0,realPos.Z-curPos.Z)).Magnitude>5.0 then
+local isSw=(hum:GetState()==Enum.HumanoidStateType.Swimming)
+local resyncGap=isSw and 8.5 or 5.5
+if(Vector3.new(realPos.X-curPos.X,0,realPos.Z-curPos.Z)).Magnitude>resyncGap then
 curPos=realPos
-task.wait(0.08)
+task.wait(0.06)
 lastT=os.clock()
 end
-local dx=targetPos.X-curPos.X
-local dz=targetPos.Z-curPos.Z
+local dx=goalPos.X-curPos.X
+local dz=goalPos.Z-curPos.Z
 local remFlat=math.sqrt(dx*dx+dz*dz)
-if remFlat<=2.0 then
-reached=true
+if remFlat<=2.2 then
+reachedGoal=true
 break
 end
-local floorY,overWater=sampleFloorY(curPos.X,curPos.Z,curPos.Y)
-local stepSpd=overWater and math.min(baseSpeed,11.0)or baseSpeed
+local curFloorY,overWater=sampleFloorY(curPos.X,curPos.Z,curPos.Y)
+local stepSpd=(overWater or isSw)and math.min(maxSpd,11.4)or maxSpd
 local moveDist=math.min(stepSpd*dt,remFlat)
-local nx=curPos.X+(dx/remFlat)*moveDist
-local nz=curPos.Z+(dz/remFlat)*moveDist
-local nextY=sampleFloorY(nx,nz,floorY)
-local smoothY=curPos.Y+math.clamp(nextY-curPos.Y,-1.5,1.5)
+local ux,uz=dx/remFlat,dz/remFlat
+local nx=curPos.X+ux*moveDist
+local nz=curPos.Z+uz*moveDist
+local nextY,nextWater=sampleFloorY(nx,nz,curFloorY)
+if(overWater or isSw)and not nextWater then
+local bankY=math.max(nextY+0.55,curPos.Y+1.2)
+local bankX=nx+ux*math.min(2.8,math.max(0,remFlat-moveDist))
+local bankZ=nz+uz*math.min(2.8,math.max(0,remFlat-moveDist))
+local bankFloorY=select(1,sampleFloorY(bankX,bankZ,bankY))
+curPos=Vector3.new(bankX,math.max(bankFloorY+0.35,bankY),bankZ)
+hrp.CFrame=CFrame.lookAt(curPos,curPos+Vector3.new(ux,0,uz))
+hrp.AssemblyLinearVelocity=Vector3.new(ux*12,8,uz*12)
+pcall(function()hum:ChangeState(Enum.HumanoidStateType.Running)end)
+hum.Jump=true
+RunService.Heartbeat:Wait()
+if stopWhenDry then
+break
+end
+else
+local yDelta=math.clamp(nextY-curPos.Y,-1.6,1.8)
+local smoothY=curPos.Y+yDelta
+if overWater then
+smoothY=math.max(smoothY,curFloorY-0.8)
+end
 curPos=Vector3.new(nx,smoothY,nz)
-local flatDir=Vector3.new(dx/remFlat,0,dz/remFlat)
+local flatDir=Vector3.new(ux,0,uz)
 hrp.AssemblyLinearVelocity=Vector3.new(flatDir.X*stepSpd,0,flatDir.Z*stepSpd)
 hrp.CFrame=CFrame.lookAt(curPos,curPos+flatDir)
+if not overWater and isSw then
+pcall(function()hum:ChangeState(Enum.HumanoidStateType.Running)end)
+end
 RunService.Heartbeat:Wait()
 end
-if reached and hrp and hrp.Parent and(Vector3.new(targetPos.X-hrp.Position.X,0,targetPos.Z-hrp.Position.Z)).Magnitude<=4.0 then
-local finalY=select(1,sampleFloorY(targetPos.X,targetPos.Z,hrp.Position.Y))
-hrp.CFrame=CFrame.new(targetPos.X,math.max(hrp.Position.Y,finalY-0.2),targetPos.Z)*targetCFrame.Rotation
+end
+if reachedGoal and hrp and hrp.Parent and(Vector3.new(goalPos.X-hrp.Position.X,0,goalPos.Z-hrp.Position.Z)).Magnitude<=4.5 then
+local fy=select(1,sampleFloorY(goalPos.X,goalPos.Z,hrp.Position.Y))
+hrp.CFrame=CFrame.new(goalPos.X,math.max(hrp.Position.Y,fy-0.15),goalPos.Z)*targetCFrame.Rotation
 end
 zeroVelocity(hrp)
 end)
 if noclipConn then noclipConn:Disconnect()end
+return okSlide and reachedGoal
+end
+local _,startInWater=sampleFloorY(startPos.X,startPos.Z,startPos.Y)
+local _,endInWater=sampleFloorY(targetPos.X,targetPos.Z,targetPos.Y)
+if(startInWater or hum:GetState()==Enum.HumanoidStateType.Swimming)and not endInWater then
+local climbMaxT=math.max((flatDist0/10.0)+5.0,9.0)
+local reachedDirectly=phaseSlideToward(targetPos,climbMaxT,14.5,true)
+if reachedDirectly then
+if not keepSeatUnlocked and hum and setAntiSeatLock then
+task.delay(0.35,function()if hum and hum.Parent then setAntiSeatLock(hum,false)end end)
+end
+return true
+end
+if not(hrp and hrp.Parent)then return false end
+startPos=hrp.Position
+flatDist0=(Vector3.new(targetPos.X-startPos.X,0,targetPos.Z-startPos.Z)).Magnitude
+if flatDist0<=2.6 then
+hrp.CFrame=CFrame.new(targetPos.X,hrp.Position.Y,targetPos.Z)*targetCFrame.Rotation
+zeroVelocity(hrp)
+if not keepSeatUnlocked and hum and setAntiSeatLock then
+task.delay(0.35,function()if hum and hum.Parent then setAntiSeatLock(hum,false)end end)
+end
+return true
+end
+_,startInWater=sampleFloorY(startPos.X,startPos.Z,startPos.Y)
+end
+if flatDist0>10.0 and not startInWater and not endInWater then
+local savedWS=hum.WalkSpeed
+local walkSpd=math.clamp(speed or 24.0,16.0,25.0)
+local t0=os.clock()
+local maxTime=math.max((flatDist0/11.0)+12.0,16.0)
+local reached=false
+local navWps=nil
+if flatDist0>=12.0 and flatDist0<=280.0 then
+local okP,pathWps=pcall(function()
+local pfs=game:GetService("PathfindingService")
+local path=pfs:CreatePath({
+AgentRadius=2.0,
+AgentHeight=5.0,
+AgentCanJump=true,
+WaypointSpacing=7.0,
+})
+path:ComputeAsync(hrp.Position,targetPos)
+if path.Status==Enum.PathStatus.Success then
+local w=path:GetWaypoints()
+if#w>=2 then return w end
+end
+return nil
+end)
+if okP and pathWps then
+navWps=pathWps
+end
+end
+local wpIdx=navWps and 2 or 1
+local lastProgressPos=hrp.Position
+local lastProgressAt=t0
+local stuckStrikes=0
+local dodgeSign=1
+local dodgeUntil=0
+pcall(function()
+while RUNTIME.alive and not RUNTIME.cancelTravelRequested and hrp.Parent and hum.Parent and hum.Health>0 do
+local now=os.clock()
+if(now-t0)>=maxTime then break end
+local p=hrp.Position
+local dxAll,dzAll=targetPos.X-p.X,targetPos.Z-p.Z
+local remAll=math.sqrt(dxAll*dxAll+dzAll*dzAll)
+if remAll<=3.0 then
+reached=true
+break
+end
+if hum:GetState()==Enum.HumanoidStateType.Swimming then
+phaseSlideToward(targetPos,4.0,14.0,true)
+lastProgressPos=hrp.Position
+lastProgressAt=os.clock()
+stuckStrikes=0
+navWps=nil
+else
+if math.abs(hum.WalkSpeed-walkSpd)>0.5 then
+hum.WalkSpeed=walkSpd
+end
+local curGoal=targetPos
+if navWps and wpIdx<=#navWps then
+local wObj=navWps[wpIdx]
+local dW=(Vector3.new(wObj.Position.X-p.X,0,wObj.Position.Z-p.Z)).Magnitude
+if dW<=4.2 then
+wpIdx=wpIdx+1
+if wpIdx<=#navWps then wObj=navWps[wpIdx]else wObj=nil end
+end
+if wObj then
+curGoal=wObj.Position
+if wObj.Action==Enum.PathWaypointAction.Jump then
+hum.Jump=true
+end
+end
+end
+local dx,dz=curGoal.X-p.X,curGoal.Z-p.Z
+local rem=math.sqrt(dx*dx+dz*dz)
+local dirX,dirZ=(rem>0.05)and(dx/rem)or 0,(rem>0.05)and(dz/rem)or-1
+local brCenter=getNearestBridgeCenter(p.X,p.Z,11.0)
+local movePt
+if brCenter then
+local pullX=(brCenter.X-p.X)*0.45
+local pullZ=(brCenter.Z-p.Z)*0.45
+local step=math.min(rem,18)
+movePt=Vector3.new(p.X+dirX*step+pullX,curGoal.Y,p.Z+dirZ*step+pullZ)
+elseif now<dodgeUntil then
+local perpX,perpZ=-dirZ*dodgeSign,dirX*dodgeSign
+movePt=Vector3.new(p.X+(dirX*0.55+perpX*0.85)*12,p.Y,p.Z+(dirZ*0.55+perpZ*0.85)*12)
+else
+local step=math.min(rem,20)
+movePt=Vector3.new(p.X+dirX*step,curGoal.Y,p.Z+dirZ*step)
+end
+hum:MoveTo(movePt)
+if(now-lastProgressAt)>=0.45 then
+local moved=(Vector3.new(p.X-lastProgressPos.X,0,p.Z-lastProgressPos.Z)).Magnitude
+lastProgressPos=p
+lastProgressAt=now
+if moved<2.0 then
+stuckStrikes=stuckStrikes+1
+hum.Jump=true
+if stuckStrikes>=2 then
+local bypassGoal=(remAll<=22)and targetPos or(p+Vector3.new(dxAll/remAll,0,dzAll/remAll)*18)
+phaseSlideToward(bypassGoal,1.35,18.5,false)
+stuckStrikes=0
+navWps=nil
+lastProgressPos=hrp.Position
+lastProgressAt=os.clock()
+elseif not brCenter then
+dodgeSign=-dodgeSign
+dodgeUntil=now+0.65
+end
+else
+stuckStrikes=0
+end
+end
+RunService.Heartbeat:Wait()
+end
+end
+end)
+if hum and hum.Parent then
+hum:MoveTo(hrp.Position)
+hum.WalkSpeed=(savedWS and savedWS>=16 and savedWS<=26)and savedWS or 16
+end
+if reached and hrp and hrp.Parent and(Vector3.new(targetPos.X-hrp.Position.X,0,targetPos.Z-hrp.Position.Z)).Magnitude<=4.5 then
+hrp.CFrame=CFrame.new(hrp.Position.X,hrp.Position.Y,hrp.Position.Z)*targetCFrame.Rotation
+zeroVelocity(hrp)
+end
+if not keepSeatUnlocked and hum and setAntiSeatLock then
+task.delay(0.35,function()
+if hum and hum.Parent then setAntiSeatLock(hum,false)end
+end)
+end
+return reached
+end
+local maxDur=math.max((flatDist0/math.min(speed or 14.0,11.0))+6.0,8.0)
+local okShort=phaseSlideToward(targetPos,maxDur,math.min(speed or 15.0,17.5),false)
 if not keepSeatUnlocked and hum and setAntiSeatLock then
 task.delay(0.4,function()
 if hum and hum.Parent then setAntiSeatLock(hum,false)end
 end)
 end
-return ok and reached
+return okShort
 end
 function Modules.getOwnedMotoMap()
 local owned={}
@@ -2517,12 +2666,58 @@ return hum.Sit==true and hum.SeatPart==driverSeat and(not root or not root.Ancho
 end
 function Modules.isPosOverWater(pos)
 if not pos then return false end
-local rp=RaycastParams.new()
-rp.FilterDescendantsInstances={workspace.Terrain}
-rp.FilterType=Enum.RaycastFilterType.Include
-rp.IgnoreWater=false
-local hit=workspace:Raycast(Vector3.new(pos.X,260,pos.Z),Vector3.new(0,-360,0),rp)
-return hit~=nil and hit.Material==Enum.Material.Water
+local excl={}
+if lp.Character then table.insert(excl,lp.Character)end
+for _,fName in ipairs({"Boats","Motos","HunterSuite_Visuals"})do
+local f=workspace:FindFirstChild(fName)
+if f then table.insert(excl,f)end
+end
+local rpSolidPart=RaycastParams.new()
+rpSolidPart.FilterDescendantsInstances=excl
+rpSolidPart.FilterType=Enum.RaycastFilterType.Exclude
+rpSolidPart.IgnoreWater=true
+rpSolidPart.RespectCanCollide=true
+local pHit=workspace:Raycast(Vector3.new(pos.X,pos.Y+4.0,pos.Z),Vector3.new(0,-10.0,0),rpSolidPart)
+if pHit and pHit.Instance~=workspace.Terrain and pHit.Instance:IsA("BasePart")and pHit.Normal.Y>=0.60 and not isTreeOrRoofCollider(pHit.Instance)then
+return false
+end
+local rpWater=RaycastParams.new()
+rpWater.FilterDescendantsInstances={workspace.Terrain}
+rpWater.FilterType=Enum.RaycastFilterType.Include
+rpWater.IgnoreWater=false
+local hit=workspace:Raycast(Vector3.new(pos.X,260,pos.Z),Vector3.new(0,-360,0),rpWater)
+if hit then
+if hit.Material~=Enum.Material.Water then
+return false
+end
+if pos.Y>=(hit.Position.Y+2.6)then
+return false
+end
+local rpDry=RaycastParams.new()
+rpDry.FilterDescendantsInstances={workspace.Terrain}
+rpDry.FilterType=Enum.RaycastFilterType.Include
+rpDry.IgnoreWater=true
+local sandHit=workspace:Raycast(Vector3.new(pos.X,hit.Position.Y+2.0,pos.Z),Vector3.new(0,-10.0,0),rpDry)
+if sandHit and(hit.Position.Y-sandHit.Position.Y)<=1.3 then
+return false
+end
+return true
+end
+local waterY=boatNav.getWaterY(pos.X,pos.Z)
+if pos.Y>=(waterY+2.8)then
+return false
+end
+local tp=boatNav.TownPlan
+if tp then
+if pos.Z>=250 and typeof(tp.riverS)=="function" then
+local okR,rv=pcall(tp.riverS,pos.X,pos.Z)
+if okR and typeof(rv)=="number" then return rv>6.0 end
+elseif pos.Z<=-166 and typeof(tp.reservoirS)=="function" then
+local okRes,rsv=pcall(tp.reservoirS,pos.X,pos.Z)
+if okRes and typeof(rsv)=="number" then return rsv>6.0 end
+end
+end
+return false
 end
 function Modules.findNearestDryLand(pos,towardPos,maxRadius)
 if not pos then return nil end
@@ -2747,11 +2942,14 @@ local score=d+(clean and 0 or 260)
 table.insert(cands,{id=id,dist=d,score=score})
 end
 table.sort(cands,function(a,b)return a.score<b.score end)
-return cands[1]and cands[1].id or nil
+return cands[1]and cands[1].id or nil,cands[1]and cands[1].dist or math.huge
 end
-local startId=findBestAttachNodes(sPos.X,sPos.Z)
-local goalId=findBestAttachNodes(ePos.X,ePos.Z)
+local startId,startRoadDist=findBestAttachNodes(sPos.X,sPos.Z)
+local goalId,goalRoadDist=findBestAttachNodes(ePos.X,ePos.Z)
 if not(startId and goalId)then return{ePos}end
+if startId==goalId or(startRoadDist>165 and goalRoadDist>165)or((startRoadDist+goalRoadDist)>(flatTotal+150)and flatTotal<=160)then
+return{ePos}
+end
 local gScore,fScore,cameFrom,open,closed={},{},{},{startId},{}
 local gn=nodes[goalId]
 local function h(id)
@@ -2823,12 +3021,39 @@ end
 return wps
 end
 function Modules.buildOverlandWaypoints(sPos,ePos,forVehicle)
-local targetOnIsland=(math.abs(ePos.X)<=38 and math.abs(ePos.Z)<=65)
-local startOnIsland=(math.abs(sPos.X)<=38 and math.abs(sPos.Z)<=65)
+local targetOnIsland=(math.abs(ePos.X)<=44 and math.abs(ePos.Z)<=62)
+local startOnIsland=(math.abs(sPos.X)<=44 and math.abs(sPos.Z)<=62)
 if forVehicle and targetOnIsland and not startOnIsland then
 local bridgeEntry=Vector3.new((sPos.X<0)and-82 or 82,8,0)
 local wps=Modules.findRoadPathAStar(sPos,bridgeEntry)
 return wps,true
+end
+if not forVehicle and targetOnIsland and not startOnIsland then
+local side=(sPos.X<0)and-1 or 1
+local entryPt=Vector3.new(side*84,8.2,0)
+local wps=((Vector3.new(sPos.X-entryPt.X,0,sPos.Z-entryPt.Z)).Magnitude>14)
+and Modules.findRoadPathAStar(sPos,entryPt)
+or{}
+table.insert(wps,Vector3.new(side*80,8.4,0))
+table.insert(wps,Vector3.new(side*57,11.4,0))
+table.insert(wps,Vector3.new(side*34,8.4,0))
+table.insert(wps,ePos)
+return wps,false
+end
+if not forVehicle and startOnIsland and not targetOnIsland then
+local side=(ePos.X<0)and-1 or 1
+local exitPt=Vector3.new(side*84,8.2,0)
+local wps={
+Vector3.new(side*34,8.4,0),
+Vector3.new(side*57,11.4,0),
+Vector3.new(side*80,8.4,0),
+exitPt,
+}
+local tail=Modules.findRoadPathAStar(exitPt,ePos)
+for _,pt in ipairs(tail)do
+table.insert(wps,pt)
+end
+return wps,false
 end
 local wps=Modules.findRoadPathAStar(sPos,ePos)
 return wps,false
@@ -3001,6 +3226,9 @@ local sPos=hrp.Position
 local ePos=targetCF.Position
 local totalDist=(sPos-ePos).Magnitude
 local spd=math.clamp(landSpeed or 22.0,14.0,22.5)
+if totalDist<=115.0 and Modules.isPosOverWater and Modules.isPosOverWater(sPos)and not Modules.isPosOverWater(ePos)then
+return safeGlideTo(targetCF,20.0)
+end
 local minMotoDist=tonumber(CFG.MotoMinDistance)or 90
 if CFG.AutoUseMoto~=false and totalDist>=minMotoDist and Modules.pickBestOwnedMoto()~=nil then
 Modules.driveMotoOverland(targetCF,"จุดหมาย")
@@ -5992,9 +6220,20 @@ local hum=lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
 if not(hrp and hum)then return false,"no_char" end
 local refCF=(typeof(targetCF)=="CFrame")and targetCF or hrp.CFrame
 local refPos=refCF.Position
-local overWater=(Modules.isPosOverWater and(Modules.isPosOverWater(refPos)or Modules.isPosOverWater(hrp.Position)))
+local destOverWater=(Modules.isPosOverWater and Modules.isPosOverWater(refPos))==true
+local meOverWater=(Modules.isPosOverWater and Modules.isPosOverWater(hrp.Position))==true
 or(hum:GetState()==Enum.HumanoidStateType.Swimming)
-if not overWater then
+if not destOverWater then
+if Modules.destroyEventPlatform then Modules.destroyEventPlatform()end
+if meOverWater then
+local distToBeach=(Vector3.new(refPos.X-hrp.Position.X,0,refPos.Z-hrp.Position.Z)).Magnitude
+if distToBeach<=95.0 then
+safeGlideTo(refCF,18.0)
+end
+end
+return true,"land"
+end
+if not meOverWater then
 if Modules.destroyEventPlatform then Modules.destroyEventPlatform()end
 return true,"land"
 end
@@ -6207,10 +6446,18 @@ else
 if Garage and Garage:IsA("RemoteEvent")then pcall(function()Garage:FireServer("boatAway")end)end
 notify({Title="🏍️ สลับเดินทางถึงจุดหมาย",Content="หลีกเลี่ยงจุดเรือติดขัด กำลังมุ่งหน้าไป "..tostring(spotName or "จุดหมาย"),Duration=3})
 end
+targetOverWater=(Modules.isPosOverWater and Modules.isPosOverWater(targetPos))==true
 local curHrp=getMyHRP()
 if curHrp and(not targetOverWater or(not arrivedBoat and(curHrp.Position-targetPos).Magnitude>26.0))then
-local remDist=(curHrp.Position-targetPos).Magnitude
+local remDist=(Vector3.new(curHrp.Position.X-targetPos.X,0,curHrp.Position.Z-targetPos.Z)).Magnitude
 if remDist>3.0 then
+if not targetOverWater and remDist<=115.0 then
+safeGlideTo(targetCF,20.0)
+curHrp=getMyHRP()
+if curHrp and(Vector3.new(curHrp.Position.X-targetPos.X,0,curHrp.Position.Z-targetPos.Z)).Magnitude>5.0 then
+safeGlideTo(targetCF,18.0)
+end
+else
 if remDist>=65.0 and hasMoto and Modules.isPosOverWater(curHrp.Position)then
 local bankX=(targetPos.X<0)and-50 or 50
 local bankZ=math.clamp(curHrp.Position.Z,-145,254)
@@ -6222,6 +6469,7 @@ if dryPt then safeGlideTo(CFrame.new(dryPt),20.0)end
 end
 end
 Modules.safeOverlandTravel(targetCF,22.0)
+end
 end
 end
 return true
@@ -10204,7 +10452,7 @@ end)
 syncGameLanguage()
 Fluent:SetTheme(InterfaceManager.Settings.Theme or "Amethyst")
 Window:SelectTab(1)
-notify({Title="ZeluxHub v5.4 โหลดสำเร็จ!",Content="Precision Economy & Teleport Engine พร้อมใช้งาน",Duration=5})
+notify({Title="ZeluxHub v5.5 โหลดสำเร็จ!",Content="Precision Economy & Teleport Engine พร้อมใช้งาน",Duration=5})
 pcall(function()SaveManager:LoadAutoloadConfig()end)
 local liveStartLure=getLiveGameLure()
 if liveStartLure then
