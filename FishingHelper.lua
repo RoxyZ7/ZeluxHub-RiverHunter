@@ -39,7 +39,7 @@ end
 local SaveManager=loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager=loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 local Window=Fluent:CreateWindow({
-Title="ZeluxHub v5.5",
+Title="ZeluxHub v5.6",
 SubTitle="ZeluxHub-River Hunter · Precision Economy, Loy Krathong Event & Auto Suite",
 TabWidth=165,
 Size=UDim2.fromOffset(620,520),
@@ -940,7 +940,7 @@ local defaultLureDisp=LURE_DISPLAY_BY_ID[initialLureId]or "เหยื่อก
 CFG={
 Language="Thai",
 AutoFish=true,AutoEquipRod=true,AutoCast=true,AutoHook=true,AutoFight=true,AutoLand=true,ReelSoundVolume=0.8,
-CastPower=0.70,CastCooldown=0.9,SelectedLure=initialLureId,HookWindowPct=0.52,MaxTension=0.65,TwitchInterval=0.92,
+CastPower=0.70,CastCooldown=0.9,SelectedLure=initialLureId,HookWindowPct=0.52,AutoTensionCap=true,MaxTension=0.65,TwitchInterval=0.92,
 AutoSell=true,AutoSellThreshold=18,AutoSellOnFull=true,
 FastHookset=false,HooksetPreDelay=0.08,DoubleStrike=true,ReactiveFightEngine=true,AntiSnapPulse=true,
 AdaptiveRetrieval=true,SnipeFishCues=true,SkipCastCover=true,
@@ -1517,8 +1517,30 @@ RUNTIME._gcCd=RUNTIME._gcCd or{}
 local now=os.clock()
 if(RUNTIME._gcCd[key]or 0)>now then return nil end
 RUNTIME._gcCd[key]=now+3.0
+if typeof(filtergc)=="function" then
 local ok,t=pcall(filtergc,"table",{Keys=keysList},false)
-return(ok and t and#t>0)and t[1]or nil
+if ok and typeof(t)=="table" and#t>0 then
+return t[1]
+end
+end
+if typeof(getgc)=="function" then
+local ok2,allObj=pcall(getgc,true)
+if ok2 and typeof(allObj)=="table" then
+for _,obj in ipairs(allObj)do
+if typeof(obj)=="table" then
+local allMatch=true
+for _,k in ipairs(keysList)do
+if rawget(obj,k)==nil then
+allMatch=false
+break
+end
+end
+if allMatch then return obj end
+end
+end
+end
+end
+return nil
 end
 local function getFightStateTable()
 if fightStateTable~=nil then return fightStateTable end
@@ -1746,6 +1768,18 @@ if RUNTIME.isNibbling then speed=0 end
 speed=math.clamp(tonumber(speed)or 0,0,1)
 if speed<0.05 then speed=0 end
 RUNTIME.currentReelSpeed=speed
+local curPh=RUNTIME.phase or lp:GetAttribute("FishPhase")or "idle"
+if curPh=="fight" then
+if speed<=0 then
+if not RUNTIME.reelZeroSince or RUNTIME.reelZeroSince<=0 then
+RUNTIME.reelZeroSince=now
+end
+else
+RUNTIME.reelZeroSince=0
+end
+else
+RUNTIME.reelZeroSince=0
+end
 local rst=getReelStateTable()
 local wheelFull=(FishingConfig.Controls and FishingConfig.Controls.WheelNotchesFull)or 9
 if rst then
@@ -1753,15 +1787,22 @@ rst.holdReel=false
 rst.holdT=0
 rst.dialTurned=0
 rst.crankRate=0
+if speed>0 then
+local targetRate=speed*wheelFull
+rst.wheelRate=targetRate
+rst.wheelNotches=targetRate*(1/60)
+else
+rst.wheelRate=0
 rst.wheelNotches=0
-rst.wheelRate=(speed>0)and(speed*wheelFull)or 0
 end
-local prevSent=(rst and rst.reelSent)or RUNTIME.lastReelSent or 0
-local prevTime=(rst and rst.reelSentT)or RUNTIME.lastReelSentAt or 0
+end
+local prevSent=(rst and rst.reelSent~=nil and rst.reelSent)or RUNTIME.lastReelSent or 0
+local prevTime=(rst and rst.reelSentT~=nil and rst.reelSentT)or RUNTIME.lastReelSentAt or 0
 local zeroFlip=(speed==0)~=(prevSent==0)
 local deltaExceeded=math.abs(speed-prevSent)>0.08 and(now-prevTime)>0.08
-local shouldForce=force and(speed~=prevSent or(now-prevTime)>=0.35)
-if shouldForce or zeroFlip or deltaExceeded then
+local fightKeepAlive=(curPh=="fight" or curPh=="landing")and speed>0 and(now-prevTime)>=0.25
+local shouldForce=force and(speed~=prevSent or(now-prevTime)>=0.25)
+if shouldForce or zeroFlip or deltaExceeded or fightKeepAlive then
 if rst then
 rst.reelSent=speed
 rst.reelSentT=now
@@ -4448,9 +4489,17 @@ elseif newPhase=="fight" then
 RUNTIME.fightActive=true
 RUNTIME.hooksetFired=true
 RUNTIME.activeMove=nil
+RUNTIME.activeMoveAt=0
+RUNTIME.activeMoveUntil=0
+RUNTIME.jumpReleaseUntil=0
+RUNTIME.reelZeroSince=0
+RUNTIME.antiSlackTapUntil=0
+RUNTIME._prevFightTe=nil
+RUNTIME._prevFightTeAt=0
+RUNTIME._gearSpecCache=nil
 RUNTIME.lastCatchData=nil
 setSteer(0,true)
-sendReel(0.55,true)
+sendReel(0.85,true)
 elseif newPhase=="landing" then
 RUNTIME.fightActive,RUNTIME.tugActive,RUNTIME.activeMove=false,false,nil
 setSteer(0,true)
@@ -4724,29 +4773,47 @@ local function isTugValue(v)
 return(typeof(v)=="number" and v>0)or v==true
 end
 local function parseActiveMove()
-if RUNTIME.activeMove and(RUNTIME.activeMoveUntil or 0)>0 and os.clock()>=RUNTIME.activeMoveUntil then
+local now=os.clock()
+if RUNTIME.activeMove and(RUNTIME.activeMoveUntil or 0)>0 and now>=RUNTIME.activeMoveUntil then
 RUNTIME.activeMove=nil
+RUNTIME.activeMoveAt=0
 RUNTIME.activeMoveUntil=0
 end
 local mv=RUNTIME.activeMove
-if not mv then return nil,nil,false end
+if not mv then return nil,nil,false,nil,0,0,0 end
 if typeof(mv)=="string" then
-return mv:lower(),nil,false
+local name=mv:lower()
+local cfg=FishingConfig.Moves and FishingConfig.Moves[name]
+local warnT=(cfg and tonumber(cfg.Warn))or 0.5
+local durT=(cfg and tonumber(cfg.Time))or 1.8
+local counter=cfg and tostring(cfg.Counter or ""):lower()or nil
+local fakeT=(cfg and tonumber(cfg.Fake))or 0
+return name,nil,false,counter,warnT,durT,fakeT
 elseif typeof(mv)=="table" then
-local name=tostring(mv.k or mv.kind or mv.id or mv.move or mv.name or ""):lower()
-local dir=mv.dir or mv.d or mv.side
+local name=tostring(mv.id or mv.k or mv.kind or mv.move or mv.name or ""):lower()
+local cfg=FishingConfig.Moves and FishingConfig.Moves[name]
+local dir=mv.side or mv.dir or mv.d
 local isNow=(mv.now==true)or(mv.active==true)or(mv.stage==2)or(name:find("now",1,true)~=nil)
-return name,dir,isNow
+local counter=tostring(mv.counter or(cfg and cfg.Counter)or ""):lower()
+if counter=="" then counter=nil end
+local warnT=tonumber(mv.warn)or(cfg and tonumber(cfg.Warn))or 0.5
+local durT=tonumber(mv.time or mv.t or mv.dur or mv.duration)or(cfg and tonumber(cfg.Time))or 1.8
+local fakeT=tonumber(mv.fake)or(cfg and tonumber(cfg.Fake))or 0
+return name,dir,isNow,counter,warnT,durT,fakeT
 end
-return nil,nil,false
+return nil,nil,false,nil,0,0,0
 end
-local function resolveMoveSteer(dir,ld)
+local function resolveMoveSteer(dir,ld,counter)
 if typeof(dir)=="string" then
 local dl=dir:lower()
 if dl:find("left",1,true)or dl=="l" then return-1 end
 if dl:find("right",1,true)or dl=="r" then return 1 end
 elseif typeof(dir)=="number" and dir~=0 then
-return math.sign(dir)
+local s=math.sign(dir)
+if counter=="lean" or counter=="feint" then
+return-s
+end
+return s
 end
 return(ld~=0)and((ld>0)and-1 or 1)or 0
 end
@@ -4788,6 +4855,108 @@ fireTugPull(os.clock(),ts)
 end
 end
 table.insert(RUNTIME.connections,RunService.Heartbeat:Connect(stepFastTug))
+function Modules.getEquippedGearSpec(now)
+now=now or os.clock()
+local gear=Modules.getClientGearTable and Modules.getClientGearTable()
+local rodId=(gear and typeof(gear.rod)=="string" and gear.rod~="" and gear.rod)
+or tostring(lp:GetAttribute("Rod")or lp:GetAttribute("RodLook")or "bamboo")
+local reelId=(gear and typeof(gear.reel)=="string" and gear.reel~="" and gear.reel)
+or tostring(lp:GetAttribute("Reel")or "spin1")
+local lineId=(gear and typeof(gear.line)=="string" and gear.line~="" and gear.line)
+or tostring(lp:GetAttribute("Line")or "nylon1")
+local ups=gear and gear.ups or nil
+local cache=RUNTIME._gearSpecCache
+if cache and cache.rodId==rodId and cache.reelId==reelId and cache.lineId==lineId
+and(now-(cache.at or 0))<0.8 then
+return cache
+end
+local spec=nil
+if FishingConfig and typeof(FishingConfig.gear)=="function" then
+local ok,res=pcall(FishingConfig.gear,rodId,reelId,lineId,ups)
+if ok and typeof(res)=="table" then spec=res end
+end
+local rodCfg=FishingConfig and FishingConfig.Rods and(FishingConfig.Rods[rodId]or FishingConfig.Rods.bamboo)or{}
+local lineCfg=FishingConfig and FishingConfig.Lines and(FishingConfig.Lines[lineId]or FishingConfig.Lines.nylon1)or{}
+local reelCfg=FishingConfig and FishingConfig.Reels and(FishingConfig.Reels[reelId]or FishingConfig.Reels.spin1)or{}
+local fightCfg=(FishingConfig and FishingConfig.Fight)or{}
+local fullFrom=tonumber(fightCfg.FullFrom)or 0.85
+local rodStrainFrom=tonumber(fightCfg.RodStrainFrom)or 0.80
+local minBreakAfter=tonumber(fightCfg.MinBreakAfter)or 0.85
+local giveUpMax=tonumber(fightCfg.GiveUpMaxTension)or 0.95
+local maxKg=tonumber(spec and spec.MaxKg)or tonumber(rodCfg.MaxKg)or 3
+local drain=tonumber(spec and spec.Drain)or tonumber(rodCfg.Drain)or 1.0
+local rise=tonumber(spec and spec.Rise)or tonumber(lineCfg.Rise)or 0.70
+local breakAfter=math.max(minBreakAfter,tonumber(spec and spec.BreakAfter)or tonumber(lineCfg.BreakAfter)or 1.0)
+local drag=tonumber(spec and spec.Drag)or((tonumber(lineCfg.Drag)or 10)*(tonumber(reelCfg.Brake)or 1.0))
+local lineKind=tostring((spec and spec.LineKind)or lineCfg.Kind or(lineId:lower():find("pe")and "pe" or "nylon"))
+local base=fullFrom-0.065
+local risePen=math.clamp((rise-0.60)*0.062,0,0.070)
+local breakBon=math.clamp((breakAfter-0.85)*0.045,0,0.028)
+local rodBon=(maxKg>=100 and 0.036)
+or(maxKg>=50 and 0.030)
+or(maxKg>=28 and 0.024)
+or(maxKg>=14 and 0.012)
+or(maxKg>=8 and 0.000)
+or-0.025
+local drainBon=math.clamp((1.0-drain)*0.07,0,0.016)
+local dragBon=math.clamp((drag-12.0)*0.0012,0,0.022)
+local hardMax=(maxKg>=15)and(fullFrom-0.035)or(rodStrainFrom-0.02)
+local steadyCap=math.clamp(base-risePen+breakBon+rodBon+drainBon+dragBon,0.56,hardMax)
+cache={
+at=now,
+rodId=rodId,
+reelId=reelId,
+lineId=lineId,
+lineKind=lineKind,
+maxKg=maxKg,
+drain=drain,
+rise=rise,
+breakAfter=breakAfter,
+drag=drag,
+fullFrom=fullFrom,
+rodStrainFrom=rodStrainFrom,
+giveUpMax=giveUpMax,
+steadyCap=steadyCap,
+}
+RUNTIME._gearSpecCache=cache
+return cache
+end
+function Modules.computeDynamicSafeCap(now,te,rsVal,bu,gu,ph)
+local spec=Modules.getEquippedGearSpec(now)
+if CFG.AutoTensionCap==false then
+local manualCap=math.clamp(tonumber(CFG.MaxTension)or 0.65,0.45,0.84)
+RUNTIME.liveSafeCap=manualCap
+return manualCap,manualCap,spec
+end
+local prevTe=tonumber(RUNTIME._prevFightTe)
+local prevT=tonumber(RUNTIME._prevFightTeAt)or 0
+local teVel=0
+if prevTe~=nil and prevT>0 then
+local dt=now-prevT
+if dt>=0.015 and dt<=0.35 then
+teVel=(te-prevTe)/dt
+end
+end
+RUNTIME._prevFightTe=te
+RUNTIME._prevFightTeAt=now
+local cap=spec.steadyCap
+if(rsVal or 0)>0.18 then
+cap=cap-math.min(0.14,((rsVal or 0)-0.18)*0.28)
+end
+if teVel>0.55 then
+cap=cap-math.min(0.07,(teVel-0.55)*0.065)
+end
+if bu then
+cap=cap-0.045
+elseif gu then
+cap=math.min(spec.giveUpMax-0.06,cap+0.10)
+elseif ph=="landing" then
+cap=math.min(spec.fullFrom-0.02,cap+0.035)
+end
+cap=math.clamp(cap,0.50,spec.giveUpMax-0.05)
+RUNTIME.liveSafeCap=cap
+return cap,spec.steadyCap,spec
+end
 local function updateFightStateMachine(now,d,ph,timers)
 local fs,ts=getFightStateTable(),getTugStateTable()
 local tl=d and d.tl
@@ -4800,49 +4969,31 @@ local jp=(tl=="jump")or(d and d.jp==true)or(fs and fs.jp==true)or false
 local bu=(d and d.bu==true)or(fs and fs.bu==true)or false
 local gu=(d and(d.gu==true or d.ex==true))or(fs and(fs.gu==true or fs.ex==true))or false
 local tg=(tl=="tug")or(d and isTugValue(d.tg))or(ts and ts.on==true)or RUNTIME.tugActive
-local gear=Modules.getClientGearTable and Modules.getClientGearTable()
-local lineAttr=tostring(lp:GetAttribute("Line")or(gear and gear.line)or "pe1"):lower()
-local isStrongLine=(lineAttr:find("pe")~=nil or lineAttr:find("wire")~=nil)
-local cfgMax=math.clamp(tonumber(CFG.MaxTension)or 0.65,0.45,0.75)
-local safeCap=isStrongLine and math.min(cfgMax,0.68)or math.min(cfgMax,0.58)
-local mvName,mvDir,mvNow=parseActiveMove()
+local mvName,mvDir,mvNow,mvCounter,mvWarn,mvDur,mvFake=parseActiveMove()
+local mvElapsed=(mvName and RUNTIME.activeMoveAt and RUNTIME.activeMoveAt>0)and(now-RUNTIME.activeMoveAt)or 0
+local mvActiveNow=mvName~=nil and(mvNow or mvElapsed>=math.max(0,(mvWarn or 0.5)-0.08))
 local rsVal=(d and d.rs~=nil and d.rs)or(fs and fs.rs)or 0
+local safeCap,baseSafeCap,gearSpec=Modules.computeDynamicSafeCap(now,te,rsVal,bu,gu,ph)
 if Modules.updateRoundReelDrag then
-Modules.updateRoundReelDrag(now,te,rsVal,tl,bu,jp,gu,tg,sn,ph,safeCap,mvName)
+Modules.updateRoundReelDrag(now,te,rsVal,tl,bu,jp,gu,tg,sn,ph,baseSafeCap,mvName)
 end
 if tl=="tug" or tg then
 RUNTIME.jumpReleaseUntil=0
+RUNTIME.reelZeroSince=0
+RUNTIME.antiSlackTapUntil=0
 sendReel(0,true)
 setSteer(0)
 fireTugPull(now,ts)
 return
 end
-if jp or(mvName and mvName:find("leap",1,true))then
-RUNTIME.jumpReleaseUntil=now+0.30
-sendReel(0,true)
-setSteer(0)
-local shouldBowRod=jp or mvNow or(mvName and mvName:find("leap",1,true)and(now-(RUNTIME.activeMoveAt or now))>=0.45)
-if shouldBowRod and(now-timers.lastJumpJerk)>=0.28 then
-timers.lastJumpJerk=now
-triggerRodTwitch()
-Input:FireServer("jerk")
-end
-return
-end
-if(mvName and(mvName:find("shake",1,true)or mvName:find("thrash",1,true)
-or mvName:find("dive",1,true)or mvName:find("roll",1,true)))
-or now<(RUNTIME.jumpReleaseUntil or 0)then
-sendReel(0,true)
-setSteer(0)
-return
-end
 if tl=="snag" or(CFG.SnagCounter and sn)then
+RUNTIME.reelZeroSince=0
 setSteer(((sd~=0 and sd or 1)<0)and-1 or 1)
 sendReel(0,true)
 return
 end
 if ph=="landing" or(d and d.ph=="landing")then
-sendReel(te<math.min(safeCap+0.04,0.72)and 0.95 or 0.20)
+sendReel(te<safeCap and 1.0 or 0.25)
 setSteer(0)
 if(now-timers.lastLandSent)>=0.08 then
 timers.lastLandSent=now
@@ -4851,63 +5002,137 @@ Input:FireServer("pull",0.08)
 end
 return
 end
-if mvName then
-if mvName:find("mud",1,true)then
+local isLeapActive=jp or(mvActiveNow and(mvCounter=="dip" or(mvName and mvName:find("leap",1,true))))
+if isLeapActive then
+RUNTIME.jumpReleaseUntil=now+0.14
+sendReel(0,true)
 setSteer(0)
-sendReel(te>=safeCap and 0 or 0.38)
+if(now-timers.lastJumpJerk)>=0.28 then
+timers.lastJumpJerk=now
+triggerRodTwitch()
+Input:FireServer("jerk")
+end
 return
-elseif mvName:find("pump",1,true)then
+end
+local reelZeroDur=(RUNTIME.reelZeroSince and RUNTIME.reelZeroSince>0)and(now-RUNTIME.reelZeroSince)or 0
+if reelZeroDur>=1.05 and now>=(RUNTIME.antiSlackTapUntil or 0)then
+RUNTIME.antiSlackTapUntil=now+0.28
+end
+if now<(RUNTIME.antiSlackTapUntil or 0)then
+local tapSpd=(te<0.42)and 0.72 or((te<safeCap)and 0.36 or 0.22)
+setSteer((ld~=0)and((ld>0)and-1 or 1)or 0)
+sendReel(tapSpd,true)
+return
+end
+local isReleaseMove=mvActiveNow and(mvCounter=="release"
+or(mvName and(mvName:find("shake",1,true)or mvName:find("thrash",1,true)or mvName:find("roll",1,true))))
+if isReleaseMove or(now<(RUNTIME.jumpReleaseUntil or 0)and te>0.22)then
 setSteer(0)
-if te>=safeCap then
+if te<=0.16 then
+sendReel(0.45,true)
+else
+sendReel(0,true)
+end
+return
+end
+if mvActiveNow and(mvCounter=="ease" or(mvName and mvName:find("dive",1,true)))then
+setSteer((ld~=0)and((ld>0)and-1 or 1)or 0)
+if te<=0.22 then
+sendReel(0.62,true)
+elseif te<0.42 then
+sendReel(0.32)
+elseif te<0.56 then
+sendReel(0.18)
+else
+sendReel(0,true)
+end
+return
+end
+if mvActiveNow and(mvCounter=="feint" or(mvName and mvName:find("feint",1,true)))then
+local activeTime=math.max(0,mvElapsed-(mvWarn or 0.5))
+local baseSteer=resolveMoveSteer(mvDir,ld,"feint")
+local steerNow=(mvFake>0 and activeTime>=mvFake)and-baseSteer or baseSteer
+setSteer(steerNow)
+if te<=0.24 then
+sendReel(0.90,true)
+elseif te>=safeCap then
 sendReel(0,true)
 else
-local onBeat=(math.floor(now/0.35)%2==0)
-sendReel(onBeat and 0.65 or 0)
+sendReel(0.55)
 end
 return
-elseif mvName:find("weeds",1,true)or mvName:find("rock",1,true)
+end
+if mvActiveNow and mvName then
+if mvCounter=="steady" or mvName:find("mud",1,true)then
+setSteer(0)
+sendReel(te>=safeCap and 0 or(te<=0.24 and 0.65 or 0.40))
+return
+elseif mvCounter=="pump" or mvName:find("pump",1,true)then
+setSteer(0)
+if te<=0.22 then
+sendReel(0.85,true)
+elseif te>=safeCap then
+sendReel(0,true)
+else
+local onBeat=(math.floor(now/0.40)%2==0)
+sendReel(onBeat and 0.72 or 0.18)
+end
+return
+elseif mvCounter=="lean" or mvCounter=="steer"
+or mvName:find("weeds",1,true)or mvName:find("rock",1,true)
 or mvName:find("current",1,true)or mvName:find("arrow",1,true)or mvName:find("drag",1,true)then
-setSteer(resolveMoveSteer(mvDir,ld))
-sendReel(te>=safeCap and 0 or(te<=0.22 and 0.85 or 0.35),te>=safeCap)
+setSteer(resolveMoveSteer(mvDir,ld,mvCounter))
+sendReel(te>=safeCap and 0 or(te<=0.24 and 0.90 or 0.48),te>=safeCap or te<=0.24)
 return
 end
 end
-if te<=0.18 then
+if te<=0.22 then
 setSteer((ld~=0)and((ld>0)and-1 or 1)or 0)
 sendReel(1.0,true)
 return
 end
-if rsVal>=0.65 then
+if rsVal>=0.68 then
+sendReel(te<0.34 and 0.28 or 0,true)
+return
+end
+if te>=safeCap then
 sendReel(0,true)
 return
 end
-if tl=="letgo" or te>=safeCap then
-sendReel(0,true)
+if tl=="letgo" then
+sendReel(te<=0.26 and 0.42 or 0,true)
 return
 end
 if bu then
 local dartLean=(fs and fs.dartLean and fs.dartLean~=0 and fs.dartLean)or(ld~=0 and-math.sign(ld))or 1
 setSteer(math.sign(dartLean))
-sendReel(te<=0.26 and 0.45 or 0,true)
+local burstCut=math.clamp(safeCap-0.16,0.46,0.62)
+if te>=burstCut then
+sendReel(0,true)
+elseif te>=0.26 then
+sendReel(0.38)
+else
+sendReel(0.82,true)
+end
 return
 end
 if gu then
 setSteer(0)
-sendReel(te<math.min(safeCap+0.14,0.84)and 1.0 or 0.25,true)
+sendReel(te<safeCap and 1.0 or 0.32,true)
 return
 end
 setSteer((tl=="lean" or ld~=0)and((ld>0)and-1 or 1)or 0)
-if sw and te>=(safeCap-0.08)then
+if sw and te>=(safeCap-0.06)then
 sendReel(0,true)
-elseif te>=(safeCap-0.12)then
+elseif te>=(safeCap-0.10)then
 if CFG.AntiSnapPulse then
 local pulse=(math.floor(now*10)%2==0)
-sendReel(pulse and 0.45 or 0.16)
+sendReel(pulse and 0.50 or 0.20)
 else
-sendReel(0.35)
+sendReel(0.38)
 end
-elseif te>=(safeCap-0.24)then
-sendReel(0.78)
+elseif te>=(safeCap-0.22)then
+sendReel(0.80)
 else
 sendReel(1.0,true)
 end
@@ -5066,26 +5291,30 @@ task.defer(refreshOpenRemoteUIs)
 elseif ev=="move" then
 RUNTIME.activeMove=d
 RUNTIME.activeMoveAt=os.clock()
-local dur=(typeof(d)=="table" and tonumber(d.t or d.time or d.dur or d.duration))or 2.2
-RUNTIME.activeMoveUntil=RUNTIME.activeMoveAt+math.clamp(dur,0.8,3.5)
-local mvName=(typeof(d)=="string" and d or(typeof(d)=="table" and tostring(d.k or d.kind or d.id or d.move or d.name or "")or "")):lower()
-if mvName:find("leap",1,true)or mvName:find("shake",1,true)or mvName:find("thrash",1,true)
-or mvName:find("dive",1,true)or mvName:find("roll",1,true)then
-sendReel(0,true)
+local mvName=(typeof(d)=="string" and d or(typeof(d)=="table" and tostring(d.id or d.k or d.kind or d.move or d.name or "")or "")):lower()
+local cfgM=FishingConfig.Moves and FishingConfig.Moves[mvName]
+local warnT=(typeof(d)=="table" and tonumber(d.warn))or(cfgM and tonumber(cfgM.Warn))or 0.5
+local durT=(typeof(d)=="table" and tonumber(d.time or d.t or d.dur or d.duration))or(cfgM and tonumber(cfgM.Time))or 1.8
+RUNTIME.activeMoveUntil=RUNTIME.activeMoveAt+math.clamp(warnT+durT,0.8,5.8)
 if mvName:find("leapnow",1,true)or(typeof(d)=="table" and(d.now==true or d.jp==true))then
+sendReel(0,true)
 triggerRodTwitch()
 Input:FireServer("jerk")
-end
 end
 elseif tostring(ev):lower()=="moveend" then
 RUNTIME.activeMove=nil
 RUNTIME.activeMoveAt=0
 RUNTIME.activeMoveUntil=0
+RUNTIME.jumpReleaseUntil=0
+if CFG.AutoFish and CFG.AutoFight and(RUNTIME.phase=="fight" or lp:GetAttribute("FishPhase")=="fight")and not RUNTIME.tugActive then
+sendReel(0.75,true)
+end
 elseif ev=="tug" then
 RUNTIME.tugActive=true
 RUNTIME.tugStartedAt=os.clock()
 RUNTIME.tugData=d
 RUNTIME.jumpReleaseUntil=0
+RUNTIME.reelZeroSince=0
 sendReel(0,true)
 setSteer(0)
 task.defer(function()
@@ -5094,6 +5323,10 @@ end)
 elseif tostring(ev):lower()=="tugend" then
 RUNTIME.tugActive=false
 RUNTIME.tugData=nil
+RUNTIME.reelZeroSince=0
+if CFG.AutoFish and CFG.AutoFight and(RUNTIME.phase=="fight" or lp:GetAttribute("FishPhase")=="fight")then
+sendReel(0.80,true)
+end
 elseif ev=="bossTrack" and typeof(d)=="table" then
 if Modules.onBossEvent then Modules.onBossEvent("bossTrack",d)end
 elseif ev=="siren" then
@@ -5139,21 +5372,28 @@ end
 end
 end))
 end
-table.insert(RUNTIME.connections,RunService.RenderStepped:Connect(function()
+pcall(function()RunService:UnbindFromRenderStep("HunterSuite_ReelSync")end)
+RunService:BindToRenderStep("HunterSuite_ReelSync",Enum.RenderPriority.First.Value,function(dt)
+if not(RUNTIME and RUNTIME.alive)then return end
 local rst=getReelStateTable()
-if rst and RUNTIME.alive then
+if not rst then return end
 local curSpd=tonumber(RUNTIME.currentReelSpeed)or 0
 local wheelFull=(FishingConfig.Controls and FishingConfig.Controls.WheelNotchesFull)or 9
 rst.holdReel=false
 rst.holdT=0
 rst.crankRate=0
 if curSpd>0.05 and not RUNTIME.isNibbling then
-rst.wheelRate=curSpd*wheelFull
+local targetRate=curSpd*wheelFull
+local safeDt=math.max(tonumber(dt)or(1/60),0.0041667)
+rst.wheelRate=targetRate
+rst.wheelNotches=targetRate*safeDt
 rst.dialVis=(rst.dialVis or 0)+(curSpd*0.28)
 else
 rst.wheelRate=0
+rst.wheelNotches=0
 end
-end
+end)
+table.insert(RUNTIME.connections,RunService.RenderStepped:Connect(function()
 local hrp=getMyHRP()
 if not hrp then clearAllCueVisuals()return end
 local p,now=hrp.Position,os.clock()
@@ -9110,13 +9350,17 @@ local midDrag=order[math.max(1,math.ceil(#order*0.5))]
 local highDrag=order[#order]
 local dangerMove=mvName and(
 mvName:find("leap",1,true)or mvName:find("shake",1,true)
-or mvName:find("thrash",1,true)or mvName:find("dive",1,true)
-or mvName:find("roll",1,true)
+or mvName:find("thrash",1,true)or mvName:find("roll",1,true)
 )
-if tl=="letgo" or tg or sn or jp or bu or dangerMove
-or(rsVal or 0)>=0.45 or(te or 0)>=(safeCap-0.12)then
+local teNum=tonumber(te)or 0
+if teNum<=0.20 and not(tg or sn or jp)then
+setRoundReelDrag(highDrag,now)
+elseif teNum<=0.28 and not(tg or sn or jp)then
+setRoundReelDrag(midDrag,now)
+elseif(tl=="letgo" and teNum>0.32)or tg or sn or jp or(bu and teNum>=0.42)or(dangerMove and teNum>0.26)
+or(rsVal or 0)>=0.55 or teNum>=(safeCap-0.10)then
 setRoundReelDrag(lowDrag,now)
-elseif gu or(ph=="landing" and(te or 0)<(safeCap-0.16))then
+elseif gu or(ph=="landing" and teNum<(safeCap-0.14))then
 setRoundReelDrag(highDrag,now)
 else
 setRoundReelDrag(midDrag,now)
@@ -9175,11 +9419,15 @@ end
 RUNTIME.usingSecondaryHand=false
 RUNTIME.lastPlantActionAt=0
 Input:FireServer("bottomTake")
-task.wait(0.12)
-if(lp:GetAttribute("FishPhase")or RUNTIME.phase)=="strike" then
+task.wait(0.10)
+local afterPh=lp:GetAttribute("FishPhase")or RUNTIME.phase
+if afterPh=="strike" then
 if not RUNTIME.hooksetFired then
 executeHookset()
 end
+elseif afterPh=="fight" or afterPh=="landing" then
+RUNTIME.reelZeroSince=0
+sendReel(0.85,true)
 end
 return true
 end)
@@ -9613,12 +9861,20 @@ end
 Modules.initFishingTab()
 function Modules.initRetrievalTab()
 Tabs.Retrieval:AddSection("🎯 ตั้งค่าการสู้ปลา & หมายตกปลา")
+Tabs.Retrieval:AddToggle("AutoTensionCap",{
+Title="คำนวณแรงตึงสาย safeCap อัตโนมัติจาก FishingConfig (แนะนำ)",
+Description="อ่านสเปกคัน (MaxKg/Drain) + สาย (Rise/BreakAfter/Drag) + อัปเกรด + แรงเค้นคัน (rs) เพื่อดึงบอสไวสุดโดยไม่ขาดสาย",
+Default=true
+}):OnChanged(function(v)
+CFG.AutoTensionCap=v
+RUNTIME._gearSpecCache=nil
+end)
 Tabs.Retrieval:AddSlider("MaxTension",{
-Title="แรงตึงสายสูงสุดที่ปลอดภัย (Max Safe Tension)",
-Description="สาย PE/Wire ดึงได้ถึง 0.68 · สายเอ็นทั่วไปล็อกปลอดภัย 0.58",
+Title="แรงตึงสายสูงสุด (ใช้เมื่อปิด Auto safeCap)",
+Description="ใช้ปรับเองแบบ Manual เมื่อปิดโหมดคำนวณอัตโนมัติ (แนะนำเปิด Auto ด้านบน)",
 Default=0.65,
 Min=0.45,
-Max=0.75,
+Max=0.84,
 Rounding=2
 }):OnChanged(function(v)CFG.MaxTension=v end)
 Tabs.Retrieval:AddSlider("TwitchInterval",{
@@ -10270,8 +10526,17 @@ botTag=" | ⏳ คัน2: รอปัก"
 end
 end
 if pStatus then
-pStatus:SetDesc(string.format("%s%s%s\nหมาย: %s | มุมตี: %s",
-phaseText,RUNTIME.bossHuntActive and " [🐉 BOSS]" or "",botTag,tostring(RUNTIME.spotStatus),dirText))
+local capInfo=""
+if Modules.getEquippedGearSpec then
+local sp=Modules.getEquippedGearSpec(os.clock())
+local activeCap=(RUNTIME.phase=="fight" or RUNTIME.phase=="landing")
+and(RUNTIME.liveSafeCap or sp.steadyCap)
+or(CFG.AutoTensionCap~=false and sp.steadyCap or(CFG.MaxTension or 0.65))
+capInfo=string.format(" | safeCap: %.2f (%s %dkg · %s)",
+activeCap,tostring(sp.rodId),math.floor(sp.maxKg+0.5),tostring(sp.lineId))
+end
+pStatus:SetDesc(string.format("%s%s%s\nหมาย: %s | มุมตี: %s%s",
+phaseText,RUNTIME.bossHuntActive and " [🐉 BOSS]" or "",botTag,tostring(RUNTIME.spotStatus),dirText,capInfo))
 end
 local ls=lp:FindFirstChild("leaderstats")
 local mVal=ls and ls:FindFirstChild("เงิน")
@@ -10350,6 +10615,7 @@ RUNTIME.isReturningFromNightGuard=false
 RUNTIME._cachedPondGeo=nil
 RUNTIME.motoRail=nil
 pcall(function()RunService:UnbindFromRenderStep("HunterSuite_MotoRail")end)
+pcall(function()RunService:UnbindFromRenderStep("HunterSuite_ReelSync")end)
 RUNTIME.activeMove,RUNTIME.activeBoss,RUNTIME.bridgeStartedAt,RUNTIME.sellStartedAt=nil,nil,0,0
 fightStateTable,tugStateTable,reelStateTable,rodStateTable=nil,nil,nil,nil
 cachedPrompts={}
@@ -10452,7 +10718,7 @@ end)
 syncGameLanguage()
 Fluent:SetTheme(InterfaceManager.Settings.Theme or "Amethyst")
 Window:SelectTab(1)
-notify({Title="ZeluxHub v5.5 โหลดสำเร็จ!",Content="Precision Economy & Teleport Engine พร้อมใช้งาน",Duration=5})
+notify({Title="ZeluxHub v5.6 โหลดสำเร็จ!",Content="Precision Economy & Teleport Engine พร้อมใช้งาน",Duration=5})
 pcall(function()SaveManager:LoadAutoloadConfig()end)
 local liveStartLure=getLiveGameLure()
 if liveStartLure then
