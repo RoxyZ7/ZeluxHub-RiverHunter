@@ -8057,8 +8057,7 @@ function Modules.renderThiefESP(now, playerPos)
                     end
                     local dist = math.floor((pPos - playerPos).Magnitude)
                     local tag = isMyThief and "🚨 โจรขโมยบ้านคุณ!" or (isThief and "⚠️ หัวขโมย" or "👀 บุกรุกเขตบ้าน!")
-                    v.label.Text = string.format("%s
-%s (%d ม.)", tag, plr.Name, dist)
+                    v.label.Text = string.format("%s\n%s (%d ม.)", tag, plr.Name, dist)
                 end
             end
         end
