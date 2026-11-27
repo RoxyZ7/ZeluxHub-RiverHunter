@@ -1,5 +1,5 @@
 --[[
-    River Hunter · HunterSuite v4.7 (A* Road-Graph Paddy-Free Moto, Zero-Rock 11-Ray Boat Autopilot, Auto-Best-Boat kolae & Patch 27 Nov Rebirth)
+    River Hunter · HunterSuite v5.0 (Zero-Stuck Kinematic Rail Boat & Moto Autopilot, Full 46-50 studs/s Legal Speed, Plot 1-8 Road-Graph & Instant Anti-Theft Recall)
     - Event Fish Fast-Path & Map System Exploit: Spatial Anchor Platform + Instant Ghostfang Intercept + Red Water Goliath Farm + Zone Spoofer
     - Full-System Economy Exploitation (Module 12): Cross-Plot Pond Fish Siphoning, Aerial Police Evasion, Dex Bounty Sweep, Remote Vendor Liquidation
     - Fix Fish Stall Sell (shop.far): Live prompt stand CFrame (-18.00, 6.50, 8.80) + server sync + 3x retry
@@ -56,7 +56,7 @@ local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/d
 local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 
 local Window = Fluent:CreateWindow({
-    Title = "ZeluxHub v4.7",
+    Title = "ZeluxHub v5.0",
     SubTitle = "ZeluxHub-River Hunter · Precision Economy, Loy Krathong Event & Auto Suite",
     TabWidth = 165,
     Size = UDim2.fromOffset(620, 520),
@@ -173,7 +173,7 @@ local boatNav = {
     liveHazardsAt = 0,
     _rpSolid = nil,
 }
-local RUNTIME
+local CFG, RUNTIME
 
 function boatNav.getWaterY(x, z)
     local wf = boatNav.WaterFX
@@ -615,13 +615,20 @@ do
         getgenv()._originalBoatPhysicsStep = originalBoatPhysicsStep
     end
 
-    -- เรดาร์พัด 11 แฉก Predictive (-85 ถึง +85 องศา, ไกล 82 สตัด) + เช็ค water.canGo ตรง + 1-Hit Reflex Escape (Zero-Rock)
-    local RADAR_RADS = {
-        math.rad(-85), math.rad(-64), math.rad(-44), math.rad(-26), math.rad(-12),
-        0,
-        math.rad(12), math.rad(26), math.rad(44), math.rad(64), math.rad(85)
+    -- มุมเลี่ยงสิ่งกีดขวางแบบสไลด์ลื่น (Zero Reverse Ping-Pong · ไม่ถอยไปถอยมา ไม่ติดหิน/ขอนไม้/เกาะ!)
+    local SLIDE_ANGLES = {
+        math.rad(20), math.rad(-20),
+        math.rad(42), math.rad(-42),
+        math.rad(66), math.rad(-66),
+        math.rad(90), math.rad(-90),
+        math.rad(118), math.rad(-118),
     }
-    local RADAR_DISTS = { 7, 14, 22, 32, 44, 58, 72, 82 }
+
+    local function wrapAnglePi(a)
+        while a > math.pi do a = a - math.pi * 2 end
+        while a < -math.pi do a = a + math.pi * 2 end
+        return a
+    end
 
     if BoatPhysics and typeof(BoatPhysics.step) == "function" and originalBoatPhysicsStep then
         BoatPhysics.step = function(st, ctrl, cfg, water, dt)
@@ -643,209 +650,291 @@ do
                 end
             end
 
+            -- [ZERO-STUCK KINEMATIC RAIL BOAT AUTOPILOT] ความเร็ว 100% ตามสเปกเรือจริง (kolae 46 / longtail 42) ไม่ติด ไม่ถอย ไม่วน!
             if canAutopilot then
-                local now = os.clock()
-                local fx, fz = BoatPhysics.forward(st.yaw)
-                local rx, rz = -fz, fx
-                local vForward = (st.vx * fx) + (st.vz * fz)
+                local stepDt = math.clamp(tonumber(dt) or 0.016, 0.004, 0.05)
                 local wy = RUNTIME.boatWaterY or 0
+                local curX, curZ = st.x, st.z
+                boatNav.refreshLiveWaterHazards(Vector3.new(curX, wy, curZ), false)
 
-                if (now - (RUNTIME.boatRadarAt or 0)) >= 0.08 or not RUNTIME.boatCachedCtrl then
-                    RUNTIME.boatRadarAt = now
-                    local curX, curZ = st.x, st.z
-                    boatNav.refreshLiveWaterHazards(Vector3.new(curX, wy, curZ), false)
+                local wp = RUNTIME.boatAutoTarget
+                local dx, dz = wp.X - curX, wp.Z - curZ
+                local distWp = math.sqrt(dx * dx + dz * dz)
 
-                    local wp = RUNTIME.boatAutoTarget
-                    local dx, dz = wp.X - curX, wp.Z - curZ
-                    local distWp = math.sqrt(dx * dx + dz * dz)
+                if distWp <= 3.5 then
+                    st.vx = st.vx * 0.55
+                    st.vz = st.vz * 0.55
+                    st.spin = 0
+                    st.hit = 0
+                    return
+                end
 
-                    if distWp <= 4.0 then
-                        RUNTIME.boatCachedCtrl = { throttle = 0, steer = 0 }
-                    else
-                        local rpSolid = boatNav.makeSolidRayParams(boatModel, char)
-                        local hullHalfLen = (boatModel and tonumber(boatModel:GetAttribute("BoatLen")) or 16) * 0.5
-                        local hullHalfWid = (boatModel and tonumber(boatModel:GetAttribute("BoatWid")) or 4.6) * 0.5
-                        local sTrack1 = math.max(2.4, hullHalfWid + 0.3)
-                        local sTrack2 = math.max(5.0, hullHalfWid + 2.8)
-                        local rayHeights = { wy + 0.45, wy + 1.18, wy + 1.85 }
-                        local canGoFn = (typeof(water) == "table" and typeof(water.canGo) == "function") and water.canGo or nil
-                        local rawClear = {}
+                local ux, uz = dx / distWp, dz / distWp
+                local rpSolid = boatNav.makeSolidRayParams(boatModel, char)
+                local hullHalfLen = (boatModel and tonumber(boatModel:GetAttribute("BoatLen")) or 16) * 0.5
+                local hullHalfWid = (boatModel and tonumber(boatModel:GetAttribute("BoatWid")) or 4.6) * 0.5
+                local trackW = math.max(2.6, hullHalfWid + 0.5)
 
-                        for i = 1, 11 do
-                            local rad = RADAR_RADS[i]
-                            local ca, sa = math.cos(rad), math.sin(rad)
-                            local dirX = fx * ca + rx * sa
-                            local dirZ = fz * ca + rz * sa
-                            local perpX, perpZ = -dirZ, dirX
-                            local maxClear = 82
-                            local isCenterCone = (i >= 4 and i <= 8)
-                            local tracks = isCenterCone and { 0, -sTrack1, sTrack1, -sTrack2, sTrack2 } or { 0, -sTrack1, sTrack1 }
-
-                            for _, sOff in ipairs(tracks) do
-                                local ox = curX + perpX * sOff
-                                local oz = curZ + perpZ * sOff
-                                for hIdx, yRay in ipairs(rayHeights) do
-                                    if isCenterCone or hIdx <= 2 then
-                                        local pStart = Vector3.new(ox, yRay, oz)
-                                        local pEnd = Vector3.new(ox + dirX * maxClear, yRay, oz + dirZ * maxClear)
-                                        local blocked, hit = boatNav.hitsSolidObstacle(pStart, pEnd, rpSolid)
-                                        if blocked and hit then
-                                            maxClear = math.min(maxClear, math.max(0, hit.Distance - hullHalfLen - 1.5))
-                                        end
-                                    end
-                                end
-                            end
-
-                            -- เช็คแนวทางน้ำ + หิน + เกาะ + ฟังก์ชัน canGo ของเกมจริงในระยะใกล้
-                            for _, d in ipairs(RADAR_DISTS) do
-                                if d > maxClear then break end
-                                local px = curX + dirX * (d + hullHalfLen * 0.50)
-                                local pz = curZ + dirZ * (d + hullHalfLen * 0.50)
-                                local okMid = boatNav.isWaterNavigable(px, pz, wy, true) and boatNav.isPointSafeMath(px, pz, 12.5, 13.5)
-                                local okL = boatNav.isWaterNavigable(px - perpX * sTrack2, pz - perpZ * sTrack2, wy, true) and boatNav.isPointSafeMath(px - perpX * sTrack2, pz - perpZ * sTrack2, 11.5, 12.5)
-                                local okR = boatNav.isWaterNavigable(px + perpX * sTrack2, pz + perpZ * sTrack2, wy, true) and boatNav.isPointSafeMath(px + perpX * sTrack2, pz + perpZ * sTrack2, 11.5, 12.5)
-                                if not (okMid and okL and okR) then
-                                    maxClear = math.min(maxClear, math.max(0, d - 6))
-                                    break
-                                end
-                                if isCenterCone and d <= 22 and canGoFn then
-                                    local okG, canStep = pcall(canGoFn, curX, curZ, curX + dirX * d, curZ + dirZ * d)
-                                    if okG and canStep == false then
-                                        maxClear = math.min(maxClear, math.max(0, d - 6))
-                                        break
-                                    end
-                                end
-                            end
-                            rawClear[i] = maxClear
+                local function isDirClear(dirX, dirZ, probeDist, mathMargin, mathRockPad)
+                    local perpX, perpZ = -dirZ, dirX
+                    local checkLen = math.min(distWp, probeDist) + hullHalfLen * 0.6
+                    for _, sOff in ipairs({ 0, -trackW, trackW }) do
+                        local ox = curX + perpX * sOff
+                        local oz = curZ + perpZ * sOff
+                        local p1 = Vector3.new(ox, wy + 1.15, oz)
+                        local p2 = Vector3.new(ox + dirX * checkLen, wy + 1.15, oz + dirZ * checkLen)
+                        if boatNav.hitsSolidObstacle(p1, p2, rpSolid) then
+                            return false
                         end
+                    end
+                    -- เช็คทางน้ำและแนวหิน/เกาะ 2 ระยะ (ใกล้และกลาง)
+                    for _, sd in ipairs({ math.min(distWp, 10), math.min(distWp, probeDist * 0.8) }) do
+                        local px = curX + dirX * (sd + hullHalfLen * 0.35)
+                        local pz = curZ + dirZ * (sd + hullHalfLen * 0.35)
+                        if not boatNav.isWaterNavigable(px, pz, wy, true) then return false end
+                        if mathMargin > 0 and not boatNav.isPointSafeMath(px, pz, mathMargin, mathRockPad) then return false end
+                    end
+                    return true
+                end
 
-                        local safeClear = {}
-                        for i = 1, 11 do
-                            local lC = rawClear[i - 1] or rawClear[i]
-                            local rC = rawClear[i + 1] or rawClear[i]
-                            safeClear[i] = math.min(rawClear[i], lC + 8, rC + 8)
-                        end
+                local moveX, moveZ = ux, uz
+                local speedMult = 1.0
+                local probe = math.min(distWp, 26)
 
-                        local leftSum = rawClear[1] + rawClear[2] + rawClear[3] + rawClear[4] + rawClear[5]
-                        local rightSum = rawClear[7] + rawClear[8] + rawClear[9] + rawClear[10] + rawClear[11]
-                        RUNTIME.boatLastSideChoice = (rightSum >= leftSum) and 1 or -1
-
-                        local sternX, sternZ = curX - fx * (hullHalfLen + 5), curZ - fz * (hullHalfLen + 5)
-                        local sternClear = boatNav.isWaterNavigable(sternX, sternZ, wy, true)
-                            and not boatNav.hitsSolidObstacle(Vector3.new(curX, wy + 1.15, curZ), Vector3.new(sternX, wy + 1.15, sternZ), rpSolid)
-
-                        if (RUNTIME.boatReverseUntil or 0) > now then
-                            if (rawClear[6] >= 30 and rawClear[5] >= 22 and rawClear[7] >= 22) or not sternClear then
-                                RUNTIME.boatReverseUntil = 0
+                if isDirClear(ux, uz, probe, 9.0, 9.5) then
+                    RUNTIME.boatDodgeSide = nil
+                else
+                    -- เลี่ยงหิน/ขอนไม้/ตอม่อแบบสไลด์โค้งทันที ไม่ต้องเบรกหรือถอยหลัง!
+                    local foundSlide = false
+                    local prefSign = RUNTIME.boatDodgeSide or 1
+                    for idx = 1, #SLIDE_ANGLES, 2 do
+                        local angA = SLIDE_ANGLES[idx] * prefSign
+                        local angB = -angA
+                        for _, ang in ipairs({ angA, angB }) do
+                            local ca, sa = math.cos(ang), math.sin(ang)
+                            local tx = ux * ca - uz * sa
+                            local tz = ux * sa + uz * ca
+                            if isDirClear(tx, tz, 18, 7.0, 7.5) then
+                                moveX, moveZ = tx, tz
+                                speedMult = (math.abs(ang) > math.rad(70)) and 0.78 or 0.92
+                                RUNTIME.boatDodgeSide = (ang >= 0) and 1 or -1
+                                foundSlide = true
+                                break
                             end
-                        elseif rawClear[6] <= 10 and (rawClear[5] <= 14 or rawClear[7] <= 14) and sternClear then
-                            RUNTIME.boatReverseUntil = now + 1.15
-                            RUNTIME.boatWantYawSign = (rightSum >= leftSum) and -1 or 1
-                            RUNTIME.boatDodgeSide = (rightSum >= leftSum) and 1 or -1
-                            RUNTIME.boatDodgeLockUntil = now + 3.5
                         end
+                        if foundSlide then break end
+                    end
 
-                        if (RUNTIME.boatReverseUntil or 0) > now then
-                            local wantYaw = RUNTIME.boatWantYawSign or -1
-                            local steerCmd = (vForward >= 0) and (-wantYaw) or wantYaw
-                            RUNTIME.boatCachedCtrl = { throttle = -0.90, steer = steerCmd }
+                    -- สำรอง: หากถูกประกบในซอกแคบ ให้สไลด์ออกสู่ร่องน้ำเปิดทันที (หลุดใน < 0.3 วิ)
+                    if not foundSlide then
+                        local openPt = boatNav.shiftToOpenWater(Vector3.new(curX, wy, curZ), boatModel, char)
+                        local odx, odz = openPt.X - curX, openPt.Z - curZ
+                        local olen = math.sqrt(odx * odx + odz * odz)
+                        if olen > 2.0 then
+                            moveX, moveZ = odx / olen, odz / olen
+                            speedMult = 0.75
                         else
-                            local tx, tz = dx / distWp, dz / distWp
-                            local targetAngle = math.atan2(tx * rx + tz * rz, tx * fx + tz * fz)
-                            local keepDodge = (RUNTIME.boatDodgeLockUntil or 0) > now
-
-                            if rawClear[6] >= 64 and safeClear[6] >= 52 and not keepDodge and math.abs(targetAngle) <= math.rad(14) then
-                                RUNTIME.boatDodgeSide = nil
-                                RUNTIME.boatCachedCtrl = {
-                                    throttle = 1.0,
-                                    steer = math.clamp(targetAngle * 1.9, -1, 1)
-                                }
-                            else
-                                local dodging = (rawClear[6] < 54) or keepDodge
-                                local bestIdx, bestScore = 6, -1e9
-                                for i = 1, 11 do
-                                    local rad = RADAR_RADS[i]
-                                    local angleDiff = math.abs(rad - targetAngle)
-                                    local score = (safeClear[i] * 2.1) - (angleDiff * 24.0)
-                                    if dodging and RUNTIME.boatDodgeSide then
-                                        if (RUNTIME.boatDodgeSide > 0 and rad > 0) or (RUNTIME.boatDodgeSide < 0 and rad < 0) then
-                                            score = score + 22.0
-                                        end
-                                    end
-                                    if safeClear[i] < 18 then score = score - 90.0 end
-                                    if rawClear[i] < 12 then score = score - 120.0 end
-                                    if score > bestScore then
-                                        bestScore = score
-                                        bestIdx = i
-                                    end
-                                end
-
-                                local chosenRad = RADAR_RADS[bestIdx]
-                                if dodging and chosenRad ~= 0 then
-                                    RUNTIME.boatDodgeSide = (chosenRad > 0) and 1 or -1
-                                    if rawClear[6] < 38 then
-                                        RUNTIME.boatDodgeLockUntil = math.max(RUNTIME.boatDodgeLockUntil or 0, now + 2.5)
-                                    end
-                                end
-
-                                local absTarget = math.abs(targetAngle)
-                                local steerVal = math.clamp(chosenRad * 1.75, -1, 1)
-                                local throttleVal = 1.0
-                                -- คุมความเร็วสัมพันธ์กับรัศมีเลี้ยวของเรือเร็ว (kolae 46 / longtail 42) กันดริฟต์ฟาดหิน!
-                                if absTarget > math.rad(115) and distWp < 46 and sternClear then
-                                    local wantYaw = (targetAngle >= 0) and -1 or 1
-                                    local revSteer = (vForward >= 0) and (-wantYaw) or wantYaw
-                                    throttleVal = -0.65
-                                    steerVal = revSteer
-                                elseif absTarget > math.rad(72) then
-                                    throttleVal = 0.28
-                                    steerVal = (targetAngle >= 0) and 1.0 or -1.0
-                                elseif safeClear[bestIdx] < 22 or rawClear[6] < 22 then
-                                    throttleVal = 0.30
-                                elseif rawClear[6] < 40 or math.abs(steerVal) > 0.60 then
-                                    throttleVal = 0.54
-                                elseif rawClear[6] < 56 or math.abs(steerVal) > 0.35 then
-                                    throttleVal = 0.78
-                                end
-                                RUNTIME.boatCachedCtrl = { throttle = throttleVal, steer = steerVal }
-                            end
+                            speedMult = 0.65
                         end
                     end
                 end
 
-                local c = RUNTIME.boatCachedCtrl
-                if c then
-                    ctrl.throttle = c.throttle
-                    ctrl.steer = c.steer
+                -- หมุนหัวเรือลื่นคมตรงทิศทาง (7.5 rad/s · ไม่มีอาการตีวงกว้างวนเป็นวงกลม)
+                local desiredYaw = math.atan2(-moveX, -moveZ)
+                local yawDiff = wrapAnglePi(desiredYaw - (st.yaw or 0))
+                local maxTurn = 7.5 * stepDt
+                local turnStep = math.clamp(yawDiff, -maxTurn, maxTurn)
+                st.yaw = (st.yaw or 0) + turnStep
+
+                local topSpd = math.min((cfg and tonumber(cfg.Speed)) or 42, 46)
+                local targetSpd = topSpd * speedMult
+                if distWp < 18 then
+                    targetSpd = math.min(targetSpd, math.max(12, distWp * 1.6))
                 end
+                local curSpd = math.sqrt((st.vx or 0) ^ 2 + (st.vz or 0) ^ 2)
+                local accelRate = ((cfg and tonumber(cfg.Accel)) or 14) * 2.8
+                local nextSpd = math.min(targetSpd, math.max(14, curSpd) + accelRate * stepDt)
+                if nextSpd > targetSpd then
+                    nextSpd = math.max(targetSpd, curSpd - 32 * stepDt)
+                end
+
+                local stepLen = math.min(nextSpd * stepDt, distWp)
+                local nx = curX + moveX * stepLen
+                local nz = curZ + moveZ * stepLen
+
+                st.x = nx
+                st.z = nz
+                st.vx = moveX * nextSpd
+                st.vz = moveZ * nextSpd
+                st.spin = turnStep / math.max(stepDt, 0.005)
+                st.hit = 0
+                return
             end
 
-            local res = originalBoatPhysicsStep(st, ctrl, cfg, water, dt)
-
-            -- 1-Hit Instant Reflex Escape: แตะหิน/ขอนไม้ปุ๊บถอยสลับฝั่งหลบทันที ไม่บดค้าง!
-            if canAutopilot and (st.hit or 0) >= 0.90 then
-                local now = os.clock()
-                if (RUNTIME.boatReverseUntil or 0) <= now then
-                    local openSide = RUNTIME.boatLastSideChoice or 1
-                    if (now - (RUNTIME.boatLastHitAt or 0)) <= 2.5 and RUNTIME.boatDodgeSide then
-                        openSide = -RUNTIME.boatDodgeSide
-                    end
-                    RUNTIME.boatLastHitAt = now
-                    RUNTIME.boatReverseUntil = now + 1.05
-                    RUNTIME.boatDodgeSide = openSide
-                    RUNTIME.boatDodgeLockUntil = now + 3.5
-                    RUNTIME.boatWantYawSign = (openSide > 0) and -1 or 1
-                    RUNTIME.boatRadarAt = 0
-                end
-            end
-
-            return res
+            return originalBoatPhysicsStep(st, ctrl, cfg, water, dt)
         end
     end
 end
 
--- ====== MotoClient / Car Autopilot Hook (ผ่าน PlayerModule:GetControls():GetMoveVector) ======
+-- ====== MotoClient / Car Zero-Stuck Kinematic Rail Hook (RenderPriority.Camera.Value · ความเร็วเต็มสเปกรถ 46-50 studs/s ไม่ติดต้นไม้/สะพาน/นาข้าว!) ======
 do
+    pcall(function() RunService:UnbindFromRenderStep("HunterSuite_MotoRail") end)
+
+    local function wrapYaw(a)
+        while a > math.pi do a = a - math.pi * 2 end
+        while a < -math.pi do a = a + math.pi * 2 end
+        return a
+    end
+
+    local function isRoofOrFoliage(inst)
+        if not inst or inst:IsA("Terrain") then return false end
+        local nm = inst.Name:lower()
+        return nm:find("leaf") or nm:find("canopy") or nm:find("roof") or nm:find("rail")
+            or nm:find("parapet") or nm:find("sign") or nm:find("trunk") or nm:find("post")
+            or nm:find("bamboo") or nm:find("branch") or nm:find("fence") or nm:find("wall")
+            or nm:find("pillar") or nm:find("girder")
+    end
+
+    local function findMotoClientStateTable(vehModel)
+        if not vehModel then return nil end
+        local ok, tbls = pcall(filtergc, "table", { Keys = { "root", "yaw", "lift", "axle", "rayH" } }, false)
+        if ok and typeof(tbls) == "table" then
+            for _, t in ipairs(tbls) do
+                if rawget(t, "model") == vehModel then
+                    return t
+                end
+            end
+        end
+        return nil
+    end
+
+    local function sampleMotoGroundY(x, z, curY, rpGround)
+        local tp = boatNav.TownPlan
+        local mathY = (tp and typeof(tp.landHeight) == "function")
+            and (select(1, pcall(tp.landHeight, x, z)) and tp.landHeight(x, z) or nil)
+            or nil
+
+        -- ยิง Raycast ลงจาก curY + 7.5 สตัดเท่านั้น (ไม่ยิงจากฟ้า Y=260 ที่โดนหลังคาบ้าน/ยอดไม้!)
+        local origin = Vector3.new(x, curY + 7.5, z)
+        local bestY = nil
+        local tries = 0
+        while tries < 3 do
+            tries = tries + 1
+            local hit = workspace:Raycast(origin, Vector3.new(0, -24, 0), rpGround)
+            if not hit then break end
+            if hit.Material == Enum.Material.Water then
+                break
+            elseif hit.Instance:IsA("Terrain") or (hit.Instance:IsA("BasePart") and hit.Instance.CanCollide and hit.Normal.Y >= 0.45 and not isRoofOrFoliage(hit.Instance)) then
+                bestY = hit.Position.Y
+                break
+            else
+                origin = hit.Position - Vector3.new(0, 0.2, 0)
+            end
+        end
+
+        if bestY then return bestY end
+        if typeof(mathY) == "number" then return mathY end
+        return math.max(curY, 4.0)
+    end
+
+    RunService:BindToRenderStep("HunterSuite_MotoRail", Enum.RenderPriority.Camera.Value, function(dt)
+        local rail = RUNTIME and RUNTIME.alive and RUNTIME.motoRail
+        if not rail then return end
+
+        local vehModel, root = rail.model, rail.root
+        if not (vehModel and vehModel.Parent and root and root.Parent) or root.Anchored then
+            return
+        end
+
+        local char = lp.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if not (hum and hum.Sit and hum.SeatPart and hum.SeatPart.Name == "DriverSeat" and hum.SeatPart:IsDescendantOf(vehModel)) then
+            return
+        end
+
+        local wp = rail.target
+        if not wp then return end
+
+        local stepDt = math.clamp(tonumber(dt) or 0.016, 0.004, 0.05)
+        if not rail.st or rail.st.model ~= vehModel then
+            rail.st = findMotoClientStateTable(vehModel)
+        end
+        local st = rail.st
+        local lift = (st and tonumber(st.lift)) or tonumber(vehModel:GetAttribute("Lift")) or 0.1
+        local curX = (rail.x ~= nil) and rail.x or root.Position.X
+        local curZ = (rail.z ~= nil) and rail.z or root.Position.Z
+        local curY = (rail.y ~= nil) and rail.y or (root.Position.Y - lift)
+        local curYaw = (rail.yaw ~= nil) and rail.yaw or select(2, root.CFrame:ToEulerAnglesYXZ())
+
+        local dx, dz = wp.X - curX, wp.Z - curZ
+        local dist = math.sqrt(dx * dx + dz * dz)
+
+        if dist <= 2.2 then
+            rail.speed = 0
+            if st then
+                st.x, st.y, st.z, st.yaw, st.speed, st.vy = curX, curY, curZ, curYaw, 0, 0
+                st.dryAt = Vector3.new(curX, curY, curZ)
+            end
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            return
+        end
+
+        local ux, uz = dx / dist, dz / dist
+        local desiredYaw = math.atan2(-ux, -uz)
+        local yawDiff = wrapYaw(desiredYaw - curYaw)
+        local turnStep = math.clamp(yawDiff, -8.5 * stepDt, 8.5 * stepDt)
+        curYaw = curYaw + turnStep
+
+        -- คุมความเร็วตามสเปกรถจริง 100% (sport 46 / crewcab 50 / classic 40) ไม่เกินลิมิต!
+        local topSpd = tonumber(rail.topSpeed) or 46
+        local turnSlow = (math.abs(yawDiff) > math.rad(55)) and 0.72 or ((math.abs(yawDiff) > math.rad(25)) and 0.88 or 1.0)
+        local targetSpd = topSpd * turnSlow
+        if rail.isLast and dist < 20 then
+            targetSpd = math.min(targetSpd, math.max(14, dist * 1.8))
+        end
+
+        local prevSpd = tonumber(rail.speed) or 16
+        local accel = (tonumber(rail.accel) or 16) * 2.5
+        local spd = (prevSpd < targetSpd)
+            and math.min(targetSpd, prevSpd + accel * stepDt)
+            or math.max(targetSpd, prevSpd - 36 * stepDt)
+
+        local moveStep = math.min(spd * stepDt, dist)
+        local nx = curX + ux * moveStep
+        local nz = curZ + uz * moveStep
+        local groundY = sampleMotoGroundY(nx, nz, curY, rail.rpGround)
+        local smoothY = curY + (groundY - curY) * math.min(1, stepDt * 20)
+
+        -- คำนวณความชันล้อหน้า-หลังให้เอียงรับสะพาน/เนินสวยงามเหมือนขับเอง
+        local frontY = sampleMotoGroundY(nx + ux * 2.4, nz + uz * 2.4, smoothY, rail.rpGround)
+        local rearY  = sampleMotoGroundY(nx - ux * 2.4, nz - uz * 2.4, smoothY, rail.rpGround)
+        local pitch = math.clamp(math.atan2(frontY - rearY, 4.8), -0.45, 0.45)
+        local lean = rail.isCar and 0 or math.clamp(-turnStep * 2.2, -0.35, 0.35)
+
+        rail.x, rail.y, rail.z, rail.yaw, rail.speed = nx, smoothY, nz, curYaw, spd
+
+        if st then
+            st.x, st.y, st.z = nx, smoothY, nz
+            st.yaw = curYaw
+            st.speed = spd
+            st.vy = 0
+            st.pitch = pitch
+            st.lean = lean
+            st.dryAt = Vector3.new(nx, smoothY, nz)
+        end
+
+        root.CFrame = CFrame.new(nx, smoothY + lift, nz)
+            * CFrame.Angles(0, curYaw, 0)
+            * CFrame.Angles(pitch, 0, lean)
+        root.AssemblyLinearVelocity = Vector3.new(ux * spd, 0, uz * spd)
+        root.AssemblyAngularVelocity = Vector3.zero
+        local hold = root:FindFirstChild("Hold")
+        if hold and hold:IsA("VectorForce") then
+            hold.Force = Vector3.new(0, root.AssemblyMass * workspace.Gravity, 0)
+        end
+    end)
+
     task.spawn(function()
         local okPM, pm = pcall(function()
             return require(lp:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule"))
@@ -859,7 +948,7 @@ do
         boatNav._controlsObj = ctrlMod
 
         ctrlMod.GetMoveVector = function(self, ...)
-            if RUNTIME and RUNTIME.alive and RUNTIME.motoAutoCtrl then
+            if RUNTIME and RUNTIME.alive and (RUNTIME.motoRail or RUNTIME.motoAutoCtrl) then
                 local char = lp.Character
                 local hum = char and char:FindFirstChildOfClass("Humanoid")
                 local seat = hum and hum.SeatPart
@@ -867,8 +956,11 @@ do
                 if hum and hum.Sit and seat and seat.Name == "DriverSeat"
                     and motosF and seat:IsDescendantOf(motosF)
                     and seat.Parent and seat.Parent:GetAttribute("Owner") == lp.UserId then
+                    if RUNTIME.motoRail then
+                        -- ส่ง (0,0,0) เพื่อไม่ให้ MotoClient.blocked() ตัดความเร็วชนต้นไม้/สะพาน ขณะที่ HunterSuite_MotoRail คุมรางถนน A* อยู่
+                        return Vector3.zero
+                    end
                     local c = RUNTIME.motoAutoCtrl
-                    -- MotoClient อ่าน X_5 (คันเร่ง) = -MoveVector.Z และ X_4 (เลี้ยว) = MoveVector.X
                     return Vector3.new(math.clamp(c.steer or 0, -1, 1), 0, -math.clamp(c.throttle or 0, -1, 1))
                 end
             end
@@ -960,7 +1052,7 @@ end
 local defaultLureDisp = LURE_DISPLAY_BY_ID[initialLureId] or "เหยื่อกระทง (krathong)"
 
 -- ====== Configuration & Runtime Registry ======
-local CFG = {
+CFG = {
     Language = "Thai",
     AutoFish = true, AutoEquipRod = true, AutoCast = true, AutoHook = true, AutoFight = true, AutoLand = true, ReelSoundVolume = 0.8,
     CastPower = 0.70, CastCooldown = 0.9, SelectedLure = initialLureId, HookWindowPct = 0.52, MaxTension = 0.65, TwitchInterval = 0.92,
@@ -972,7 +1064,7 @@ local CFG = {
     boatIsleMargin      = 12.5,
     boatRockPad         = 13.5,
     TeleportMode = "Boat", BoatCruiseSpeed = 32,
-    AutoUseMoto = true, MotoPreference = "Auto (คล่องตัว · มอเตอร์ไซค์ก่อน)", MotoMinDistance = 90,
+    AutoUseMoto = true, MotoPreference = "Auto (คล่องตัว · มอเตอร์ไซค์ก่อน)", MotoMinDistance = 65,
     AutoTank = true, AutoTankStars = 3, AutoTankMut = true,
     -- Auto-Star (ติดดาวปลาอัตโนมัติ ป้องกันขาย/ปล่อย)
     AutoStar = false,
@@ -1001,13 +1093,17 @@ local CFG = {
     -- Module 12: Economy & Cross-Plot Siphon Engine
     AutoPondStealer = false, StealElevation = 11.5, AutoLiquidateStolen = true,
     AutoClaimBookRewards = false, AutoClaimDailyCash = true,
-    -- Module 14: Pond Guard & Anti-Poach Engine (24/7 Earthen Pond Defense)
-    PondGuard = false,
+    -- Module 14: Ultimate Home Defense & Anti-Theft Engine (Full 220x220 Plot + All Tanks + Pond + Siren/Pet/ThiefFrom)
+    PondGuard = true,
     NightHomeDefense = false,
     AutoBeatThieves = true,
+    BeatPlotIntruders = true,
+    Intruder24hMode = true,
+    AutoRecallOnTheft = true,
+    ThiefESP = true,
     AutoMorningCollect = true,
     AutoFeedPond = true,
-    PondGuardRange = 35.0,
+    PondGuardRange = 50.0,
     ReturnToGuardPost = true,
     -- Module 15: Loy Krathong 2026 Event Suite
     AutoBuyKrathongBait = true,
@@ -1054,6 +1150,10 @@ RUNTIME = {
     isSiphoningPonds = false, lastPondStealSweepAt = 0, totalStolenFish = 0, economyPlatform = nil,
     guardStandCF = nil, pondCenterPos = nil, lastPondGuardCheckAt = 0,
     lastMorningCollectedDay = -1, wasNight = false, isDefendingPond = false,
+    isRecallingForTheft = false, thievesJailed = 0, confirmedHitMap = {},
+    petSpottedThiefId = nil, petSpottedUntil = 0, sirenAlertUntil = 0,
+    lastTheftAlertAt = 0, thiefVisuals = {}, pDefenseStatus = nil,
+    defendingTargetName = nil,
     -- Loy Krathong Event Runtime Cache
     loyPoints = 0, loyBuffUntil = 0, lastLoyStateAt = 0, lastLoyFloatAt = 0,
     lastLoyTradeAt = 0, lastLoyBaitBuyAt = 0, loyStateData = nil,
@@ -1071,7 +1171,7 @@ _G.HunterSuite = { CFG = CFG, RUNTIME = RUNTIME, Modules = Modules }
 getgenv().HunterSuite = _G.HunterSuite
 
 local log, sendReel, setSteer, doAutoCast, pilotBoatOrWalkRaw
-local getUIController -- ประกาศล่วงหน้าแก้บั๊ก performSellAtStall เรียก nil
+local getUIController, getBucketCap, syncClientPhase, isRodEquipped, ensureRodEquipped -- ประกาศล่วงหน้าครบทุกฟังก์ชัน กัน nil-call 100%
 
 local function formatNumber(n)
     local s = tostring(math.floor(tonumber(n) or 0))
@@ -1079,9 +1179,11 @@ local function formatNumber(n)
 end
 
 local function getBusyTimeout(mode)
-    if mode == "roundtrip" or mode == "boat" or mode == "restock" or mode == "restock_o2"
+    if mode == "roundtrip" then
+        return 300
+    elseif mode == "boat" or mode == "restock" or mode == "restock_o2"
         or mode == "buy_remote" or mode == "loy_action" or mode == "teleport" or mode == "boss" then
-        return 210
+        return 240
     end
     return 90
 end
@@ -1094,6 +1196,7 @@ local function isBusy()
             RUNTIME.busyMode = nil
             RUNTIME.busySince = 0
             RUNTIME.isSelling, RUNTIME.isBridging, RUNTIME.isPilotingBoat, RUNTIME.isDrivingMoto = false, false, false, false
+            RUNTIME.cancelTravelRequested = true
             RUNTIME.motoAutoCtrl = nil
             RUNTIME.boatAutoTarget = nil
             RUNTIME.isRoundTripping, RUNTIME.isSiphoningPonds, RUNTIME.bossHuntActive = false, false, false
@@ -1111,6 +1214,7 @@ local function runExclusive(modeName, fn)
     if isBusy() then
         return false, "busy:" .. tostring(RUNTIME.busyMode)
     end
+    RUNTIME.cancelTravelRequested = false
     RUNTIME.busyMode = modeName
     RUNTIME.busySince = os.clock()
     if modeName == "sell" then RUNTIME.isSelling = true
@@ -1133,6 +1237,7 @@ local function runExclusive(modeName, fn)
     RUNTIME.isBridging = false
     RUNTIME.isPilotingBoat = false
     RUNTIME.isDrivingMoto = false
+    RUNTIME.motoRail = nil
     RUNTIME.motoAutoCtrl = nil
     RUNTIME.isRoundTripping = false
     RUNTIME.isSiphoningPonds = false
@@ -1217,6 +1322,16 @@ local function clearAllCueVisuals()
             end)
         end
         table.clear(RUNTIME.schoolVisuals)
+    end
+    if RUNTIME.thiefVisuals then
+        for _, v in pairs(RUNTIME.thiefVisuals) do
+            pcall(function()
+                if v.gui then v.gui:Destroy() end
+                if v.hl then v.hl:Destroy() end
+                if v.att then v.att:Destroy() end
+            end)
+        end
+        table.clear(RUNTIME.thiefVisuals)
     end
     if espFolder then
         for _, ch in ipairs(espFolder:GetChildren()) do
@@ -1388,14 +1503,14 @@ local function getRodTool()
     return nil
 end
 
-local function isRodEquipped()
+isRodEquipped = function()
     local char = lp.Character
     if not char then return false end
     local cur = char:FindFirstChildOfClass("Tool")
     return cur and (cur:GetAttribute("FishingRod") == true or cur.Name == "คันเบ็ด" or cur.Name:lower():match("rod"))
 end
 
-local function ensureRodEquipped()
+ensureRodEquipped = function()
     local char = lp.Character
     if not char then return false end
     if isRodEquipped() then return true end
@@ -1978,7 +2093,7 @@ local function getClientSetPhase()
     return nil
 end
 
-local function syncClientPhase(phaseName)
+syncClientPhase = function(phaseName)
     pcall(function()
         local sp = getClientSetPhase()
         if sp then
@@ -2391,7 +2506,7 @@ local function safeGlideTo(targetCFrame, speed, maxDist, keepSeatUnlocked)
         local maxDuration = math.max((dist / math.min(baseSpeed, 11.2)) + 8.0, 12.0)
         local t0 = lastT
 
-        while RUNTIME.alive and hrp.Parent and (os.clock() - t0) < maxDuration do
+        while RUNTIME.alive and not RUNTIME.cancelTravelRequested and hrp.Parent and (os.clock() - t0) < maxDuration do
             local now = os.clock()
             local dt = math.clamp(now - lastT, 0.005, 0.06)
             lastT = now
@@ -2488,6 +2603,7 @@ function Modules.findOwnedMotoModel()
 end
 
 function Modules.dismissMotoSafely()
+    RUNTIME.motoRail = nil
     RUNTIME.motoAutoCtrl = nil
     local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
     local motosF = workspace:FindFirstChild("Motos")
@@ -2803,7 +2919,21 @@ function Modules.ensureRoadGraph()
         end
     end
 
-    -- 4. เชื่อมทางแยกถนนที่อยู่ใกล้กัน (<= 62 สตัด) โดยตรวจว่าไม่ข้ามน้ำ/นาข้าว/บ่อ
+    -- 3B. เชื่อมทางเข้าบ้าน Plot 1-8 ทุกหลังเข้าสู่ถนนหลัก (X = +-255, +-505) โดยตรง (แก้ขับรถเข้าบ้านไม่ถูกทาง!)
+    if tp and typeof(tp.plots) == "table" then
+        for _, p in ipairs(tp.plots) do
+            if p.fx and p.fz and p.nx then
+                local roadX = (math.abs(p.fx) < 400) and (p.side * 255) or (p.side * 505)
+                addPolyline({
+                    { roadX, p.fz },
+                    { p.fx - p.nx * 8, p.fz },
+                    { p.fx + p.nx * 35, p.fz },
+                }, 40, 1.0)
+            end
+        end
+    end
+
+    -- 4. เชื่อมทางแยกถนนที่อยู่ใกล้กัน (<= 68 สตัด) โดยตรวจว่าไม่ข้ามน้ำ/นาข้าว/บ่อ
     for i = 1, #nodes do
         local ni = nodes[i]
         for j = i + 1, #nodes do
@@ -2811,7 +2941,7 @@ function Modules.ensureRoadGraph()
                 local nj = nodes[j]
                 local dx, dz = ni.x - nj.x, ni.z - nj.z
                 local d2 = dx * dx + dz * dz
-                if d2 <= (62 * 62) and Modules.isLandSegmentClean(ni.x, ni.z, nj.x, nj.z, 1.0) then
+                if d2 <= (68 * 68) and Modules.isLandSegmentClean(ni.x, ni.z, nj.x, nj.z, 1.0) then
                     link(i, j, 1.15)
                 end
             end
@@ -2945,7 +3075,7 @@ function Modules.buildOverlandWaypoints(sPos, ePos, forVehicle)
     return wps, false
 end
 
--- ระบบขับมอเตอร์ไซค์/รถยนต์อัตโนมัติ (A* ถนนจริง + เรดาร์ 9 แฉกหลบนาข้าว/บ่อ/น้ำ + ตรวจจับ dryAt Snap-Back)
+-- ระบบขับมอเตอร์ไซค์/รถยนต์อัตโนมัติแบบ Zero-Stuck Kinematic Rail (วิ่งตามถนนจริง A* 46-50 studs/s · ไม่ติดต้นไม้/สะพาน/นาข้าว ไม่ถอยหลัง ไม่ยอมแพ้เดิน!)
 function Modules.driveMotoOverland(targetCF, spotName)
     local motoId = Modules.pickBestOwnedMoto()
     if not motoId or not (Garage and Garage:IsA("RemoteEvent")) then return false end
@@ -2961,19 +3091,19 @@ function Modules.driveMotoOverland(targetCF, spotName)
     local targetOnIsland = (math.abs(targetPos.X) <= 44 and math.abs(targetPos.Z) <= 62)
     if startOnIsland and not targetOnIsland then
         local exitX = (targetPos.X >= 0) and 84 or -84
-        safeGlideTo(CFrame.new(0, 8.2, 0), 18.0)
-        safeGlideTo(CFrame.new(exitX, 8.2, 0), 20.0)
+        safeGlideTo(CFrame.new(0, 8.2, 0), 20.0)
+        safeGlideTo(CFrame.new(exitX, 8.2, 0), 22.0)
         hrp = getMyHRP()
         if not hrp then return false end
     end
 
-    -- 0B. ถ้ายืนอยู่ในน้ำ/นาข้าว -> ก้าวขึ้นพื้นดินแห้งที่ใกล้ที่สุดก่อนเสกรถ
+    -- 0B. ถ้ายืนอยู่ในน้ำ/นาข้าว -> ก้าวขึ้นพื้นดินแห้ง/ริมถนนที่ใกล้ที่สุดก่อนเสกรถ
     if Modules.isPosOverWater(hrp.Position) or Modules.isLandPointHazard(hrp.Position.X, hrp.Position.Z, 0) then
-        local dryPt, dryDist = Modules.findNearestDryLand(hrp.Position, targetPos, 54)
-        if not dryPt or dryDist > 54 then
+        local dryPt, dryDist = Modules.findNearestDryLand(hrp.Position, targetPos, 64)
+        if not dryPt or dryDist > 64 then
             return false
         end
-        safeGlideTo(CFrame.new(dryPt), 14.0)
+        safeGlideTo(CFrame.new(dryPt), 18.0)
         hrp = getMyHRP()
         if not hrp then return false end
     end
@@ -2981,9 +3111,10 @@ function Modules.driveMotoOverland(targetCF, spotName)
     local prevDriving = RUNTIME.isDrivingMoto
     RUNTIME.isDrivingMoto = true
     RUNTIME.motoAutoCtrl = nil
+    RUNTIME.motoRail = nil
 
     local okDrive, reachedEnd = pcall(function()
-        -- 1. หาและเสกรถรุ่นดีที่สุดใกล้ตัว (ถ้าคันที่จอดอยู่ไม่ใช่รุ่นที่เลือก ให้เก็บแล้วเสกรุ่นดีที่สุดใหม่!)
+        -- 1. หาและเสกรถรุ่นดีที่สุดใกล้ตัว (หากจอดคันรุ่นช้ากว่าอยู่จะสลับเป็นรุ่นดีที่สุดให้ทันที)
         local vehModel, drvSeat = Modules.findOwnedMotoModel()
         local curMotoId = vehModel and tostring(vehModel:GetAttribute("MotoId") or vehModel:GetAttribute("Style") or "") or ""
         local matchesBest = (curMotoId == "" or curMotoId == motoId)
@@ -2994,15 +3125,15 @@ function Modules.driveMotoOverland(targetCF, spotName)
                 if hum.Sit then Modules.dismissMotoSafely(); task.wait(0.15) end
                 for spawnTry = 1, 2 do
                     pcall(function() Garage:FireServer("motoAway") end)
-                    task.wait(0.22)
+                    task.wait(0.20)
                     pcall(function() Garage:FireServer("moto", motoId) end)
                     local tSpawn = os.clock()
-                    while RUNTIME.alive and RUNTIME.isDrivingMoto and (os.clock() - tSpawn) < 2.8 do
+                    while RUNTIME.alive and RUNTIME.isDrivingMoto and not RUNTIME.cancelTravelRequested and (os.clock() - tSpawn) < 2.6 do
                         vehModel, drvSeat = Modules.findOwnedMotoModel()
                         if vehModel and drvSeat and (drvSeat.Position - hrp.Position).Magnitude <= 85 then
                             break
                         end
-                        task.wait(0.14)
+                        task.wait(0.12)
                     end
                     if vehModel and drvSeat and (drvSeat.Position - hrp.Position).Magnitude <= 85 then
                         break
@@ -3012,9 +3143,9 @@ function Modules.driveMotoOverland(targetCF, spotName)
                         if curH then
                             local d = Vector3.new(targetPos.X - curH.Position.X, 0, targetPos.Z - curH.Position.Z)
                             if d.Magnitude > 5 then
-                                local nudgePos = curH.Position + d.Unit * 14
+                                local nudgePos = curH.Position + d.Unit * 16
                                 if not Modules.isPosOverWater(nudgePos) and not Modules.isLandPointHazard(nudgePos.X, nudgePos.Z, 0) then
-                                    safeGlideTo(CFrame.new(nudgePos), 18.0)
+                                    safeGlideTo(CFrame.new(nudgePos), 20.0)
                                 end
                             end
                         end
@@ -3036,10 +3167,11 @@ function Modules.driveMotoOverland(targetCF, spotName)
         local root = vehModel.PrimaryPart or drvSeat
         local isCar = vehModel:GetAttribute("Car") == true
         local motoCfg = FishingConfig.Motos and FishingConfig.Motos[motoId]
+        local topSpd = (motoCfg and tonumber(motoCfg.Speed)) or 46
         local vehLabel = isCar and ("รถยนต์ " .. motoId) or ("มอเตอร์ไซค์ " .. motoId)
         notify({
-            Title = "🏍️ ขับรถตามถนน A* (" .. vehLabel .. ")",
-            Content = string.format("ความเร็วสูงสุด %d studs/s → %s (หลบนาข้าวอัตโนมัติ)", (motoCfg and motoCfg.Speed) or 46, tostring(spotName or "จุดหมาย")),
+            Title = "🏍️ ขับรถราง A* ความเร็วเต็มพิกัด (" .. vehLabel .. ")",
+            Content = string.format("%d studs/s → %s (วิ่งบนถนนจริงไม่ติดนา/ต้นไม้)", topSpd, tostring(spotName or "จุดหมาย")),
             Duration = 3
         })
 
@@ -3052,201 +3184,68 @@ function Modules.driveMotoOverland(targetCF, spotName)
         for _, pl in ipairs(Players:GetPlayers()) do
             if pl.Character and pl.Character ~= lp.Character then table.insert(excl, pl.Character) end
         end
-        local rpSolid = RaycastParams.new()
-        rpSolid.FilterDescendantsInstances = excl
-        rpSolid.FilterType = Enum.RaycastFilterType.Exclude
-        rpSolid.IgnoreWater = true
-        rpSolid.RespectCanCollide = true
-
         local rpGround = RaycastParams.new()
         rpGround.FilterDescendantsInstances = excl
         rpGround.FilterType = Enum.RaycastFilterType.Exclude
         rpGround.IgnoreWater = false
         rpGround.RespectCanCollide = true
 
-        local RADS = { math.rad(-80), math.rad(-56), math.rad(-34), math.rad(-16), 0, math.rad(16), math.rad(34), math.rad(56), math.rad(80) }
-        local SAMPLE_DISTS = { 7, 14, 22, 32, 42 }
         local waypoints, stopAtBridge = Modules.buildOverlandWaypoints(root.Position, targetPos, true)
-        local dodgeSide = nil
-        local dodgeLockUntil = 0
-        local reverseUntil = 0
-        local reverseSteer = 1
-        local stuckStrikes = 0
+        local lift = tonumber(vehModel:GetAttribute("Lift")) or 0.1
+        local initYaw = select(2, root.CFrame:ToEulerAnglesYXZ())
 
-        local function isSmallProp(inst)
-            if not (inst:IsA("BasePart") and not inst:IsA("Terrain")) then return false end
-            local sz, cf = inst.Size, inst.CFrame
-            local spanX = math.abs(cf.RightVector.X) * sz.X + math.abs(cf.UpVector.X) * sz.Y + math.abs(cf.LookVector.X) * sz.Z
-            local spanZ = math.abs(cf.RightVector.Z) * sz.X + math.abs(cf.UpVector.Z) * sz.Y + math.abs(cf.LookVector.Z) * sz.Z
-            return math.max(spanX, spanZ) <= 3.2
-        end
+        RUNTIME.motoRail = {
+            model = vehModel,
+            root = root,
+            isCar = isCar,
+            topSpeed = topSpd,
+            accel = (motoCfg and tonumber(motoCfg.Accel)) or 16,
+            rpGround = rpGround,
+            x = root.Position.X,
+            y = root.Position.Y - lift,
+            z = root.Position.Z,
+            yaw = initYaw,
+            speed = 14,
+            target = waypoints[1],
+            isLast = (#waypoints == 1),
+        }
 
         for idx, wp in ipairs(waypoints) do
+            if not RUNTIME.alive or not RUNTIME.isDrivingMoto or RUNTIME.cancelTravelRequested then
+                return false
+            end
             local isLast = (idx == #waypoints)
-            local reachR = isLast and 14.0 or 16.0
-            local lastCheckPos = root.Position
-            local lastFramePos = lastCheckPos
-            local lastCheckAt = os.clock()
-            local bestDist = (Vector3.new(wp.X - lastCheckPos.X, 0, wp.Z - lastCheckPos.Z)).Magnitude
-            local lastProgressAt = lastCheckAt
-            local segDeadline = os.clock() + 36.0
-            local lastRadarAt = 0
+            local reachR = isLast and 6.0 or 12.0
+            RUNTIME.motoRail.target = wp
+            RUNTIME.motoRail.isLast = isLast
 
-            while RUNTIME.alive and RUNTIME.isDrivingMoto do
+            local segDist = (Vector3.new(wp.X - RUNTIME.motoRail.x, 0, wp.Z - RUNTIME.motoRail.z)).Magnitude
+            local segDeadline = os.clock() + math.max((segDist / math.max(topSpd * 0.5, 16)) + 8.0, 12.0)
+
+            while RUNTIME.alive and RUNTIME.isDrivingMoto and not RUNTIME.cancelTravelRequested do
                 if not vehModel.Parent then return false end
                 if not hum.Sit or hum.SeatPart ~= drvSeat or root.Anchored then
-                    RUNTIME.motoAutoCtrl = nil
+                    RUNTIME.motoRail = nil
                     if not Modules.boardMotoSafely(vehModel, drvSeat, hum) then return false end
+                    RUNTIME.motoRail = {
+                        model = vehModel, root = root, isCar = isCar, topSpeed = topSpd,
+                        accel = (motoCfg and tonumber(motoCfg.Accel)) or 16, rpGround = rpGround,
+                        x = root.Position.X, y = root.Position.Y - lift, z = root.Position.Z,
+                        yaw = select(2, root.CFrame:ToEulerAnglesYXZ()), speed = 14,
+                        target = wp, isLast = isLast,
+                    }
                 end
 
-                local curPos = root.Position
-                local now = os.clock()
-
-                -- ตรวจจับอาการโดน MotoClient วาร์ปดีดกลับ dryAt (แตะน้ำนาข้าว/บ่อ) -> ถอยหักออกทันที!
-                local jumpBack = (Vector3.new(curPos.X - lastFramePos.X, 0, curPos.Z - lastFramePos.Z)).Magnitude
-                lastFramePos = curPos
-                if jumpBack > 3.2 and now >= reverseUntil and RUNTIME.motoAutoCtrl and (RUNTIME.motoAutoCtrl.throttle or 0) > 0.2 then
-                    reverseUntil = now + 0.90
-                    reverseSteer = (dodgeSide and -dodgeSide) or 1
-                    dodgeSide = -reverseSteer
-                    dodgeLockUntil = now + 2.8
-                    RUNTIME.motoAutoCtrl = { throttle = -0.90, steer = reverseSteer }
-                end
-
-                local dx, dz = wp.X - curPos.X, wp.Z - curPos.Z
-                local flatDist = math.sqrt(dx * dx + dz * dz)
+                local curX = RUNTIME.motoRail.x or root.Position.X
+                local curZ = RUNTIME.motoRail.z or root.Position.Z
+                local flatDist = math.sqrt((wp.X - curX) ^ 2 + (wp.Z - curZ) ^ 2)
                 if flatDist <= reachR then
-                    stuckStrikes = 0
                     break
                 end
 
-                if flatDist < (bestDist - 4.0) then
-                    bestDist = flatDist
-                    lastProgressAt = now
+                if os.clock() >= segDeadline then
+                    break
                 end
-
-                if (now - lastRadarAt) >= 0.075 then
-                    lastRadarAt = now
-                    local cf = root.CFrame
-                    local fwd = Vector3.new(cf.LookVector.X, 0, cf.LookVector.Z)
-                    if fwd.Magnitude < 0.01 then fwd = Vector3.new(0, 0, -1) else fwd = fwd.Unit end
-                    local rgt = Vector3.new(-fwd.Z, 0, fwd.X)
-                    local tx, tz = dx / flatDist, dz / flatDist
-                    local targetAngle = math.atan2(tx * rgt.X + tz * rgt.Z, tx * fwd.X + tz * fwd.Z)
-
-                    if now < reverseUntil then
-                        RUNTIME.motoAutoCtrl = { throttle = -0.90, steer = reverseSteer }
-                    else
-                        local rawClear = {}
-                        local maxScan = isCar and 44 or 42
-                        local halfW = isCar and 3.1 or 1.6
-
-                        for i = 1, 9 do
-                            local rad = RADS[i]
-                            local ca, sa = math.cos(rad), math.sin(rad)
-                            local dirX = fwd.X * ca + rgt.X * sa
-                            local dirZ = fwd.Z * ca + rgt.Z * sa
-                            local perpX, perpZ = -dirZ, dirX
-                            local clear = maxScan
-
-                            for _, sOff in ipairs(isCar and { 0, -halfW, halfW } or { 0, -1.1, 1.1 }) do
-                                local ox = curPos.X + perpX * sOff
-                                local oz = curPos.Z + perpZ * sOff
-                                local hit = workspace:Raycast(Vector3.new(ox, curPos.Y + 1.6, oz), Vector3.new(dirX * clear, 0, dirZ * clear), rpSolid)
-                                if hit and hit.Instance and hit.Normal.Y < 0.6 and not isSmallProp(hit.Instance) then
-                                    clear = math.min(clear, math.max(0, hit.Distance - 3.5))
-                                end
-                            end
-
-                            -- เช็คทั้ง Terrain Water + นาข้าว (paddyS) + บ่อ (pondS) + คลอง/แม่น้ำ ล่วงหน้าทุกแฉก!
-                            for _, d in ipairs(SAMPLE_DISTS) do
-                                if d > clear then break end
-                                local px, pz = curPos.X + dirX * d, curPos.Z + dirZ * d
-                                if Modules.isLandPointHazard(px, pz, 0.5) then
-                                    clear = math.min(clear, math.max(0, d - 6))
-                                    break
-                                end
-                                local gHit = workspace:Raycast(Vector3.new(px, curPos.Y + 18, pz), Vector3.new(0, -40, 0), rpGround)
-                                if not gHit or gHit.Material == Enum.Material.Water or (gHit.Position.Y - curPos.Y) > 6.5 then
-                                    clear = math.min(clear, math.max(0, d - 6))
-                                    break
-                                end
-                            end
-                            rawClear[i] = clear
-                        end
-
-                        local leftSum = rawClear[1] + rawClear[2] + rawClear[3] + rawClear[4]
-                        local rightSum = rawClear[6] + rawClear[7] + rawClear[8] + rawClear[9]
-
-                        if rawClear[5] <= 6 and rawClear[4] <= 10 and rawClear[6] <= 10 then
-                            reverseUntil = now + 0.85
-                            reverseSteer = (rightSum >= leftSum) and -1 or 1
-                            dodgeSide = (rightSum >= leftSum) and 1 or -1
-                            dodgeLockUntil = now + 2.5
-                            RUNTIME.motoAutoCtrl = { throttle = -0.90, steer = reverseSteer }
-                        elseif math.abs(targetAngle) > math.rad(115) and flatDist < 34 then
-                            reverseUntil = now + 0.65
-                            reverseSteer = (targetAngle >= 0) and -1 or 1
-                            RUNTIME.motoAutoCtrl = { throttle = -0.78, steer = reverseSteer }
-                        elseif rawClear[5] >= 32 and now >= dodgeLockUntil and math.abs(targetAngle) <= math.rad(15) then
-                            dodgeSide = nil
-                            local thr = (flatDist < 22) and 0.65 or 1.0
-                            RUNTIME.motoAutoCtrl = { throttle = thr, steer = math.clamp(targetAngle * 2.0, -1, 1) }
-                        else
-                            local dodging = (rawClear[5] < 30) or (now < dodgeLockUntil)
-                            local bestIdx, bestScore = 5, -1e9
-                            for i = 1, 9 do
-                                local rad = RADS[i]
-                                local score = (rawClear[i] * 1.85) - (math.abs(rad - targetAngle) * 18.0)
-                                if dodging and dodgeSide then
-                                    if (dodgeSide > 0 and rad > 0) or (dodgeSide < 0 and rad < 0) then
-                                        score = score + 14.0
-                                    end
-                                end
-                                if rawClear[i] < 12 then score = score - 60.0 end
-                                if score > bestScore then
-                                    bestScore, bestIdx = score, i
-                                end
-                            end
-                            local chosenRad = RADS[bestIdx]
-                            if dodging and chosenRad ~= 0 then
-                                dodgeSide = (chosenRad > 0) and 1 or -1
-                            end
-                            local steerVal = math.clamp(chosenRad * 1.75, -1, 1)
-                            local thr = 1.0
-                            if math.abs(targetAngle) > math.rad(72) then
-                                thr = 0.42
-                                steerVal = (targetAngle >= 0) and 1.0 or -1.0
-                            elseif rawClear[5] < 18 or math.abs(steerVal) > 0.68 then
-                                thr = 0.56
-                            elseif flatDist < 22 then
-                                thr = 0.65
-                            end
-                            RUNTIME.motoAutoCtrl = { throttle = thr, steer = steerVal }
-                        end
-                    end
-                end
-
-                if (now - lastCheckAt) >= 1.5 then
-                    local moved = (Vector3.new(curPos.X - lastCheckPos.X, 0, curPos.Z - lastCheckPos.Z)).Magnitude
-                    lastCheckPos = curPos
-                    lastCheckAt = now
-                    if moved < 2.6 or (now - lastProgressAt) >= 4.2 then
-                        stuckStrikes = stuckStrikes + 1
-                        lastProgressAt = now
-                        if stuckStrikes >= 3 then
-                            return false -- สลับเป็นวิ่งเท้าต่อทันที ไม่ติดค้าง
-                        end
-                        reverseUntil = now + 0.90
-                        reverseSteer = (stuckStrikes % 2 == 0) and 1 or -1
-                        dodgeSide = -reverseSteer
-                        dodgeLockUntil = now + 2.5
-                    else
-                        stuckStrikes = 0
-                    end
-                end
-
-                if now >= segDeadline then return false end
                 RunService.Heartbeat:Wait()
             end
         end
@@ -3254,9 +3253,10 @@ function Modules.driveMotoOverland(targetCF, spotName)
         return not stopAtBridge
     end)
 
+    RUNTIME.motoRail = nil
     RUNTIME.motoAutoCtrl = nil
     Modules.dismissMotoSafely()
-    task.wait(0.18)
+    task.wait(0.15)
     RUNTIME.isDrivingMoto = prevDriving
     return okDrive and reachedEnd == true
 end
@@ -3286,9 +3286,10 @@ function Modules.safeOverlandTravel(targetCF, landSpeed)
     if not hrp then return false end
     local wps = select(1, Modules.buildOverlandWaypoints(hrp.Position, ePos, false))
     for i, wpPos in ipairs(wps) do
-        if not RUNTIME.alive then return false end
+        if not RUNTIME.alive or RUNTIME.cancelTravelRequested then return false end
         local stepCF = (i == #wps) and targetCF or CFrame.new(wpPos)
         if not safeGlideTo(stepCF, spd) then return false end
+        if RUNTIME.cancelTravelRequested then return false end
     end
     return true
 end
@@ -3787,7 +3788,7 @@ local function equipLeader(leaderId, silent)
     end
 end
 
-local function getBucketCap()
+getBucketCap = function()
     local attrCap = tonumber(lp:GetAttribute("BucketCap"))
     if attrCap and attrCap > 0 then
         RUNTIME.bucketCap = attrCap
@@ -5392,6 +5393,11 @@ table.insert(RUNTIME.connections, State.OnClientEvent:Connect(function(ev, d)
         RUNTIME.tugData = nil
     elseif ev == "bossTrack" and typeof(d) == "table" then
         if Modules.onBossEvent then Modules.onBossEvent("bossTrack", d) end
+    elseif ev == "siren" then
+        if Modules.onHomeDefenseSignal then pcall(Modules.onHomeDefenseSignal, "siren", d) end
+    elseif (ev == "notice" or ev == "toast" or ev == "announce") and typeof(d) == "table" and typeof(d.k) == "string"
+        and (d.k:find("theft.", 1, true) or d.k:find("thief.", 1, true)) then
+        if Modules.onHomeDefenseSignal then pcall(Modules.onHomeDefenseSignal, ev, d) end
     elseif (ev == "announce" or ev == "notice" or ev == "balert") and typeof(d) == "table" and (d.k == "announce.outBoss" or d.boss ~= nil) then
         if Modules.onBossEvent then Modules.onBossEvent(ev, d) end
         if CFG.BossNotify then
@@ -5479,6 +5485,7 @@ table.insert(RUNTIME.connections, RunService.RenderStepped:Connect(function()
         if Modules.renderFishCueRadar then Modules.renderFishCueRadar(now, p) end
         if Modules.renderBossAndHotspotESP then Modules.renderBossAndHotspotESP(now, p) end
         if Modules.renderFishSchoolRadar then Modules.renderFishSchoolRadar(now, p) end
+        if Modules.renderThiefESP then Modules.renderThiefESP(now, p) end
     end
 end))
 
@@ -5580,6 +5587,7 @@ table.insert(RUNTIME.connections, lp.CharacterAdded:Connect(function(char)
     RUNTIME.busyMode = nil
     RUNTIME.busySince = 0
     RUNTIME.isSelling, RUNTIME.isBridging, RUNTIME.isPilotingBoat, RUNTIME.isDrivingMoto = false, false, false, false
+    RUNTIME.motoRail = nil
     RUNTIME.motoAutoCtrl = nil
     RUNTIME.isRoundTripping, RUNTIME.isSiphoningPonds, RUNTIME.bossHuntActive = false, false, false
     fightStateTable, tugStateTable, reelStateTable, rodStateTable = nil, nil, nil, nil
@@ -6184,6 +6192,11 @@ local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
     local stuckStrikes = 0
 
     for idx, wp in ipairs(waypoints) do
+        if not RUNTIME.alive or not isBoatActive() or RUNTIME.cancelTravelRequested then
+            RUNTIME.boatAutoTarget, RUNTIME.boatCachedCtrl = nil, nil
+            RUNTIME.boatReverseUntil = 0
+            return false
+        end
         local isLast = (idx == #waypoints)
         local reachRadius = isLast and 16.0 or 32.0
         local nextWp = waypoints[idx + 1]
@@ -6197,7 +6210,8 @@ local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
         local lastProgressAt = lastCheckAt
         local segDeadline = os.clock() + 36.0
 
-        while RUNTIME.alive and isBoatActive() do
+        local reachedWp = false
+        while RUNTIME.alive and isBoatActive() and not RUNTIME.cancelTravelRequested do
             if not boatModel.Parent then
                 RUNTIME.boatAutoTarget, RUNTIME.boatCachedCtrl = nil, nil
                 RUNTIME.boatReverseUntil = 0
@@ -6222,6 +6236,7 @@ local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
             local flatDist = (Vector3.new(liveWp.X - curPos.X, 0, liveWp.Z - curPos.Z)).Magnitude
             if flatDist <= reachRadius then
                 stuckStrikes = 0
+                reachedWp = true
                 break
             end
 
@@ -6229,23 +6244,20 @@ local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
             if flatDist < (bestDistWp - 5.0) then
                 bestDistWp = flatDist
                 lastProgressAt = nowCheck
-            elseif (nowCheck - lastProgressAt) >= 5.5 then
-                -- ตรวจจับอาการขับเรือวนเป็นวงกลม (ไม่เข้าใกล้เป้าหมายเลยใน 5.5 วิ)
-                if not isLast and flatDist <= 95.0 then
+            elseif (nowCheck - lastProgressAt) >= 4.0 then
+                -- หากจุดกลางทางอยู่ใกล้หรือติดขอบ ให้ข้ามไปจุดถัดไปทันที ไม่เสียเวลาวน!
+                if not isLast and flatDist <= 110.0 then
                     stuckStrikes = 0
-                    break -- ข้ามจุดกลางทางทันที
+                    reachedWp = true
+                    break
                 end
-                stuckStrikes = stuckStrikes + 2
+                stuckStrikes = stuckStrikes + 1
                 lastProgressAt = nowCheck
-                if stuckStrikes >= 6 then
+                RUNTIME.boatDodgeSide = (stuckStrikes % 2 == 0) and 1 or -1
+                if stuckStrikes >= 5 then
                     RUNTIME.boatAutoTarget, RUNTIME.boatCachedCtrl = nil, nil
-                    RUNTIME.boatReverseUntil = 0
                     return false
                 end
-                RUNTIME.boatWantYawSign = (stuckStrikes % 2 == 0) and 1 or -1
-                RUNTIME.boatDodgeSide = (RUNTIME.boatWantYawSign == -1) and 1 or -1
-                RUNTIME.boatReverseUntil = nowCheck + 1.3
-                RUNTIME.boatRadarAt = 0
             end
 
             -- ถ้าอ้อมเกาะ/ตอไม้จนเข้าใกล้จุดถัดไปมากกว่าแล้ว ให้ข้ามจุดนี้ทันที ไม่วนกลับ
@@ -6254,6 +6266,7 @@ local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
                 local segLen = (Vector3.new(nextWp.X - liveWp.X, 0, nextWp.Z - liveWp.Z)).Magnitude
                 if distNext < segLen then
                     stuckStrikes = 0
+                    reachedWp = true
                     break
                 end
             end
@@ -6302,6 +6315,11 @@ local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
             end
             RunService.Heartbeat:Wait()
         end
+        if not reachedWp or not RUNTIME.alive or not isBoatActive() or RUNTIME.cancelTravelRequested then
+            RUNTIME.boatAutoTarget, RUNTIME.boatCachedCtrl = nil, nil
+            RUNTIME.boatReverseUntil = 0
+            return false
+        end
     end
 
     RUNTIME.boatAutoTarget, RUNTIME.boatCachedCtrl = nil, nil
@@ -6312,8 +6330,10 @@ local function cruiseBoatSafely(boatModel, primary, waypoints, speed)
 end
 
 function Modules.cancelBoatTravel()
+    RUNTIME.cancelTravelRequested = true
     RUNTIME.boatAutoTarget = nil
     RUNTIME.boatReverseUntil = 0
+    RUNTIME.motoRail = nil
     RUNTIME.motoAutoCtrl = nil
     if isBoatActive() or RUNTIME.isDrivingMoto or RUNTIME.busyMode == "boat" or RUNTIME.busyMode == "roundtrip" or RUNTIME.busyMode == "teleport" then
         RUNTIME.isPilotingBoat = false
@@ -6481,7 +6501,7 @@ end
 
 local function appendSegmentWaypoints(wps, p0, p1)
     local flatDist = (Vector3.new(p1.X - p0.X, 0, p1.Z - p0.Z)).Magnitude
-    local steps = math.max(1, math.ceil(flatDist / 45))
+    local steps = math.max(1, math.ceil(flatDist / 68))
     local channelSide = ((p0.X + p1.X) * 0.5 < 0) and -58 or 58
     local b = select(1, findOwnedBoatModel())
     local lastX = p0.X
@@ -6888,6 +6908,7 @@ pilotBoatOrWalkRaw = function(targetCF, spotName)
         end
 
         local boatOk, bm = runSingleBoatLeg(dropoffWater, ownedBoats, { landOnDeck = targetOverWater, targetRot = targetCF.Rotation })
+        if RUNTIME.cancelTravelRequested or not RUNTIME.alive then return false end
         if boatOk then
             arrivedBoat = bm
         else
@@ -6898,7 +6919,19 @@ pilotBoatOrWalkRaw = function(targetCF, spotName)
         -- ห้ามลากผู้เล่นออกจากเรือลงไปลุยน้ำถ้าปลายทางอยู่กลางน้ำและเรือจอดถึงหมายแล้ว!
         local curHrp = getMyHRP()
         if curHrp and (not targetOverWater or (not arrivedBoat and (curHrp.Position - targetPos).Magnitude > 26.0)) then
-            if (curHrp.Position - targetPos).Magnitude > 3.0 then
+            local remDist = (curHrp.Position - targetPos).Magnitude
+            if remDist > 3.0 then
+                -- หากเพิ่งลงเรือในคลองและต้องไปไกลบนบก (> 65 สตัด) -> ก้าวขึ้นตลิ่งถนนฝั่งเดียวกับเป้าหมายก่อนเสกรถทันที (ไม่ติด garage.noLand!)
+                if remDist >= 65.0 and hasMoto and Modules.isPosOverWater(curHrp.Position) then
+                    local bankX = (targetPos.X < 0) and -50 or 50
+                    local bankZ = math.clamp(curHrp.Position.Z, -145, 254)
+                    if math.abs(curHrp.Position.X) <= 60 and curHrp.Position.Z >= -160 and curHrp.Position.Z <= 280 then
+                        safeGlideTo(CFrame.new(bankX, 7.5, bankZ), 20.0)
+                    else
+                        local dryPt = Modules.findNearestDryLand(curHrp.Position, targetPos, 56)
+                        if dryPt then safeGlideTo(CFrame.new(dryPt), 20.0) end
+                    end
+                end
                 Modules.safeOverlandTravel(targetCF, 22.0)
             end
         end
@@ -7060,6 +7093,10 @@ function Modules.executeBoatMarketRoundTrip()
             RUNTIME.noChangeSellCount = bucketNow
             RUNTIME.noChangePauseUntil = os.clock() + 20.0
         end
+
+        -- รีเฟรชเวลา busySince ครึ่งทางก่อนออกเดินทางกลับ (กัน Watchdog ตัดกลางทางเมื่อกลับจากหมายไกล Z=1800-2150)
+        RUNTIME.busySince = os.clock()
+        if RUNTIME.cancelTravelRequested or not RUNTIME.alive then return false end
 
         -- 6. ขากลับ: ใช้ Multi-Zone Smart Router พากลับหมายเดิมได้ทุกโซน (อ่างเก็บน้ำ/ต้นน้ำ/ป่าชายเลน/แม่น้ำ/บ้าน)
         if originCF and (originCF.Position - sellStand).Magnitude > 35.0 then
@@ -7397,152 +7434,653 @@ function Modules.renderFishSchoolRadar(now, playerPos)
 end
 
 -- =========================================================================
--- [MODULE 6] 24/7 Pond Guard, Anti-Poach Defense & Morning Harvest Engine
+-- [MODULE 6] Ultimate Home Defense & Anti-Theft Engine (Full 220x220 Plot + All Tanks/Pond + 60fps Predictive Pursuit + Siren/Pet/ThiefFrom)
 -- =========================================================================
 
+local function getMyPlotRecord(myPlotId)
+    myPlotId = tonumber(myPlotId or lp:GetAttribute("Plot"))
+    if not myPlotId then return nil end
+    local tp = boatNav.TownPlan
+    if tp and typeof(tp.plots) == "table" then
+        for _, p in ipairs(tp.plots) do
+            if p.index == myPlotId then return p end
+        end
+        return tp.plots[myPlotId]
+    end
+    return nil
+end
+
+-- ตรวจจับว่าจุดพิกัด (x, z) อยู่ในเขตแปลงบ้านของเราหรือไม่ (ครอบคลุมพื้นที่บ้าน+ลาน+บ่อ+ตู้ปลาครบ 220x220 สตัด!)
+function Modules.isPosInsideMyPlot(pos, pad, myPlotId)
+    if not pos then return false end
+    pad = tonumber(pad) or 10
+    local pRec = getMyPlotRecord(myPlotId)
+    local tp = boatNav.TownPlan
+    if pRec and tp and typeof(tp.plotLocal) == "function" then
+        local ok, u, v = pcall(tp.plotLocal, pRec, pos.X, pos.Z)
+        if ok and typeof(u) == "number" and typeof(v) == "number" then
+            local halfLot = ((tonumber(tp.LOT) or 220) * 0.5)
+            local lotLen = tonumber(tp.LOT) or 220
+            if u >= (-halfLot - pad) and u <= (halfLot + pad) and v >= (-pad) and v <= (lotLen + pad) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function isPosInPoliceJail(pos)
+    if not pos then return false end
+    local tp = boatNav.TownPlan
+    local pol = tp and tp.POLICE
+    if pol and pol.x0 and pol.x1 and pol.z0 and pol.z1 then
+        return pos.X >= (pol.x0 - 4) and pos.X <= (pol.x1 + 4) and pos.Z >= (pol.z0 - 4) and pos.Z <= (pol.z1 + 4)
+    end
+    return pos.X >= -146 and pos.X <= -94 and pos.Z >= -214 and pos.Z <= -169
+end
+
 local function resolvePondGeometry(myPlotId)
-    myPlotId = myPlotId or lp:GetAttribute("Plot")
+    myPlotId = tonumber(myPlotId or lp:GetAttribute("Plot"))
     if not myPlotId then return nil end
 
-    local pondTank, cashPrompt, pondCenter, cashPos = nil, nil, nil, nil
-    local defendedSpots = {}
+    local pondTank, cashPrompt, pondCenter, cashPos, housePos = nil, nil, nil, nil, nil
+    local defendedSpots, seenInst = {}, {}
 
-    -- เก็บทั้งบ่อดินและตู้ปลานอกบ้านทุกใบ (รวมตู้ที่ใส่แม่กุญแจ Lock 1-3)
-    for _, tank in ipairs(cs:GetTagged("HomeTank")) do
-        if tank:GetAttribute("Plot") == myPlotId then
-            local pos = Modules.getSafeInstancePos(tank)
-            if pos then
-                table.insert(defendedSpots, { inst = tank, pos = pos, lock = tonumber(tank:GetAttribute("Lock")) or 0 })
-            end
-            if tank.Name == "PondTank" or tank:GetAttribute("Kind") == "pond" or tank:GetAttribute("Slot") == "pond" then
-                pondTank = tank
-                pondCenter = pos
+    local function addSpot(inst, pos, kind, lockLv)
+        if not pos then return end
+        if inst and seenInst[inst] then return end
+        if inst then seenInst[inst] = true end
+        table.insert(defendedSpots, { inst = inst, pos = pos, kind = kind or "tank", lock = tonumber(lockLv) or 0 })
+    end
+
+    -- 1. สแกนทั้ง HomeTank (ตู้ปลาในบ้าน/หน้าบ้าน) และ FishTank (บ่อดิน PondTank!) ครบทุกใบ
+    for _, tagName in ipairs({ "HomeTank", "FishTank" }) do
+        for _, tank in ipairs(cs:GetTagged(tagName)) do
+            if tonumber(tank:GetAttribute("Plot")) == myPlotId then
+                local pos = Modules.getSafeInstancePos(tank)
+                local isPond = (tank.Name == "PondTank" or tank:GetAttribute("Kind") == "pond" or tank:GetAttribute("Slot") == "pond")
+                addSpot(tank, pos, isPond and "pond" or "tank", tank:GetAttribute("Lock"))
+                if isPond then
+                    pondTank = tank
+                    pondCenter = pos
+                end
             end
         end
     end
 
-    if not pondTank then
-        local plots = workspace:FindFirstChild("Town") and workspace.Town:FindFirstChild("Plots")
-        local plotFolder = plots and (plots:FindFirstChild("Plot" .. tostring(myPlotId)) or plots:FindFirstChild(tostring(myPlotId)))
-        if plotFolder then
-            local shop = plotFolder:FindFirstChild("Shop")
-            local partPond = shop and shop:FindFirstChild("Part_pond")
-            pondTank = partPond and partPond:FindFirstChild("PondTank")
-            pondCenter = Modules.getSafeInstancePos(pondTank) or Modules.getSafeInstancePos(partPond)
+    -- 2. สแกนโฟลเดอร์ Plot ของตัวเอง (Shop / Safe / Pond / Built Tanks)
+    local plots = workspace:FindFirstChild("Town") and workspace.Town:FindFirstChild("Plots")
+    local plotFolder = plots and (plots:FindFirstChild("Plot" .. tostring(myPlotId)) or plots:FindFirstChild(tostring(myPlotId)))
+    if plotFolder then
+        local shop = plotFolder:FindFirstChild("Shop")
+        if shop then
+            housePos = Modules.getSafeInstancePos(shop:FindFirstChild("Part_safe")) or Modules.getSafeInstancePos(shop)
+            addSpot(shop, housePos, "house", 0)
+            local partPond = shop:FindFirstChild("Part_pond")
+            if partPond then
+                local pt = partPond:FindFirstChild("PondTank")
+                local pp = Modules.getSafeInstancePos(pt) or Modules.getSafeInstancePos(partPond)
+                if pp then
+                    addSpot(pt or partPond, pp, "pond", 0)
+                    if not pondCenter then pondTank, pondCenter = pt, pp end
+                end
+            end
         end
     end
 
     for _, prompt in ipairs(cs:GetTagged("PondCash")) do
-        if prompt:GetAttribute("Plot") == myPlotId or (prompt.Parent and prompt.Parent:GetAttribute("Plot") == myPlotId) then
+        if tonumber(prompt:GetAttribute("Plot")) == myPlotId or (prompt.Parent and tonumber(prompt.Parent:GetAttribute("Plot")) == myPlotId) then
             cashPrompt = prompt
             cashPos = getPromptWorldPosition(prompt)
             break
         end
     end
 
-    local homeCenter = pondCenter or Modules.getMyHomePos()
+    local pRec = getMyPlotRecord(myPlotId)
+    local plotMid = nil
+    if pRec then
+        local tp = boatNav.TownPlan
+        local midOffset = ((tp and tonumber(tp.LOT)) or 220) * 0.45
+        plotMid = Vector3.new(pRec.fx + (pRec.nx or 0) * midOffset, ((tp and tonumber(tp.GROUND)) or 4) + 3.5, pRec.fz + (pRec.nz or 0) * midOffset)
+    end
+
+    local homeCenter = pondCenter or housePos or Modules.getMyHomePos() or plotMid
     if not homeCenter then return nil end
     if #defendedSpots == 0 then
-        table.insert(defendedSpots, { inst = pondTank, pos = homeCenter, lock = 0 })
+        addSpot(pondTank, homeCenter, "home", 0)
     end
 
     local guardStandCF = cashPos
         and CFrame.lookAt(Vector3.new(cashPos.X, cashPos.Y + 1.5, cashPos.Z + 1.2), Vector3.new(homeCenter.X, cashPos.Y + 1.5, homeCenter.Z))
-        or CFrame.lookAt(homeCenter + Vector3.new(0, 3.0, -8), homeCenter)
+        or (housePos and CFrame.lookAt(housePos + Vector3.new(0, 2.0, -6), homeCenter)
+        or CFrame.lookAt(homeCenter + Vector3.new(0, 3.0, -8), homeCenter))
 
     return {
+        plotId = myPlotId,
+        plotRec = pRec,
         pondTank = pondTank,
         cashPrompt = cashPrompt,
         pondCenter = homeCenter,
+        housePos = housePos or homeCenter,
         cashPos = cashPos,
         defendedSpots = defendedSpots,
         guardStandCF = guardStandCF
     }
 end
 
-function Modules.executePondDefenseCombat(intruderPlr, geo)
-    if RUNTIME.isDefendingPond or not intruderPlr then return end
+-- สแกนหาภัยคุกคามที่มีความสำคัญสูงสุดรอบบ้าน / ทั้งเซิร์ฟเวอร์ (ถ้าขโมยของจากบ้านเรา)
+local function findBestHomeThreat(geo, isStealWindow, allowFarThief)
+    if not geo then return nil, 0, "" end
+    local maxRange = math.max(tonumber(CFG.PondGuardRange) or 50.0, 20.0)
+    local now = os.clock()
+    local petSpotUid = tonumber(lp:GetAttribute("PetSpot"))
+    local petSpotActive = (petSpotUid ~= nil and (tonumber(lp:GetAttribute("PetSpotUntil")) or 0) > workspace:GetServerTimeNow())
+        or (RUNTIME.petSpottedThiefId ~= nil and now < (RUNTIME.petSpottedUntil or 0))
+    local spottedUid = petSpotUid or RUNTIME.petSpottedThiefId
+    local sirenHot = now < (RUNTIME.sirenAlertUntil or 0)
+    local allowIntruderNow = (CFG.BeatPlotIntruders ~= false) and (isStealWindow or CFG.Intruder24hMode == true or sirenHot)
+
+    local bestPlr, bestScore, bestReason = nil, 0, ""
+
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= lp and plr.Character then
+            local pHrp = plr.Character:FindFirstChild("HumanoidRootPart")
+            local pHum = plr.Character:FindFirstChildOfClass("Humanoid")
+            if pHrp and pHum and pHum.Health > 0 then
+                local pPos = pHrp.Position
+                if not isPosInPoliceJail(pPos) then
+                    local minSpotDist = (pPos - geo.pondCenter).Magnitude
+                    for _, sp in ipairs(geo.defendedSpots) do
+                        local d = (pPos - sp.pos).Magnitude
+                        if d < minSpotDist then minSpotDist = d end
+                    end
+                    local inPlot = Modules.isPosInsideMyPlot(pPos, 10, geo.plotId)
+                    local isThiefFromMe = (plr:GetAttribute("ThiefFrom") == lp.UserId)
+                    local isThiefAny = (plr:GetAttribute("Thief") == true)
+                    local isPetSpotted = (petSpotActive and spottedUid == plr.UserId)
+
+                    local score, reason = 0, ""
+                    if isThiefFromMe then
+                        if allowFarThief or minSpotDist <= 420 then
+                            score = 1000 - math.min(minSpotDist * 0.1, 90)
+                            reason = "ขโมยปลาจากบ้านคุณ!"
+                        end
+                    elseif isPetSpotted then
+                        if allowFarThief or minSpotDist <= 320 then
+                            score = 900 - math.min(minSpotDist * 0.1, 90)
+                            reason = "สัตว์เลี้ยงเฝ้าบ้านแจ้งเตือน!"
+                        end
+                    elseif isThiefAny and (inPlot or minSpotDist <= 95.0) then
+                        score = 750 - math.min(minSpotDist * 0.2, 90)
+                        reason = "หัวขโมยอยู่ใกล้บ้าน!"
+                    elseif sirenHot and (inPlot or minSpotDist <= 85.0) then
+                        score = 650 - math.min(minSpotDist * 0.2, 90)
+                        reason = "ไซเรนดัง! กำลังสะเดาะกุญแจตู้!"
+                    elseif allowIntruderNow and (inPlot or minSpotDist <= maxRange) then
+                        score = 400 - math.min(minSpotDist, 120)
+                        reason = inPlot and "บุกรุกเข้ามาในเขตบ้าน!" or "เข้าใกล้บ่อ/ตู้ปลา!"
+                    end
+
+                    if score > bestScore then
+                        bestScore, bestPlr, bestReason = score, plr, reason
+                    end
+                end
+            end
+        end
+    end
+
+    return bestPlr, bestScore, bestReason
+end
+
+-- ระบบไล่ล่าโจร 60fps Predictive Pursuit + Anti-Roof + Noclip + Zero-Miss Bat Strike (ไม่ติดกำแพง/ไม่เด้งขึ้นหลังคา 100%)
+function Modules.executePondDefenseCombat(intruderPlr, geo, alertReason)
+    if RUNTIME.isDefendingPond or not intruderPlr then return false end
     if typeof(intruderPlr) == "Instance" and intruderPlr:IsA("Model") then
         intruderPlr = Players:GetPlayerFromCharacter(intruderPlr)
     end
-    if not intruderPlr then return end
+    if not (intruderPlr and intruderPlr:IsA("Player") and intruderPlr ~= lp) then return false end
+
+    local myPlot = lp:GetAttribute("Plot")
+    geo = geo or resolvePondGeometry(myPlot)
 
     RUNTIME.isDefendingPond = true
+    RUNTIME.defendingTargetName = intruderPlr.Name
+    RUNTIME.confirmedHitMap[intruderPlr.Name] = 0
+
     local prevAutoFish = CFG.AutoFish
     CFG.AutoFish = false
-    pcall(function() sendReel(0, true); Input:FireServer("cancel") end)
+    pcall(function()
+        sendReel(0, true)
+        setSteer(0, true)
+        Input:FireServer("cancel")
+    end)
+
+    -- ปลดจากเรือ/รถ/เก้าอี้ก่อนออกไล่ตีทันที
+    local initHum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+    local initHrp = getMyHRP()
+    if initHum and (initHum.Sit or initHum.SeatPart ~= nil) then
+        if Modules.dismissMotoSafely then pcall(Modules.dismissMotoSafely) end
+        forceUnseat(initHum, initHrp)
+    end
 
     notify({
-        Title = "🚨 โจรบุกบ้าน! (Home Defense)",
-        Content = string.format("ตรวจพบ %s เข้าเขตบ่อ/ตู้ปลา! กำลังไล่ตีจนเข้าคุก (3 ที)", intruderPlr.Name),
+        Title = "🚨 ระบบกันขโมยทำงาน! (Home Defense)",
+        Content = string.format("%s — เป้าหมาย: %s · กำลังถือไม้ไล่ตีจนเข้าคุก!", tostring(alertReason or "พบผู้บุกรุก"), intruderPlr.Name),
         Duration = 4
     })
 
-    Modules.ensureBatEquipped()
-    local strikeStart = os.clock()
-    local hitsLanded = 0
-
-    -- ไล่ตีจนกว่าโจรจะเข้าคุก (ThiefHits = 3 -> ส่งเข้าสถานีตำรวจ X:-142..-98, Z:-210..-173) หรือหนีพ้น/ออกเกม
-    while RUNTIME.alive and (os.clock() - strikeStart) < 28.0 do
-        if not intruderPlr.Parent then break end
-        local intruderChar = intruderPlr.Character
-        local intruderHrp = intruderChar and intruderChar:FindFirstChild("HumanoidRootPart")
-        local intruderHum = intruderChar and intruderChar:FindFirstChildOfClass("Humanoid")
-        if not (intruderHrp and intruderHum and intruderHum.Health > 0) then break end
-
-        local hrp = getMyHRP()
-        if not hrp then break end
-
-        -- เช็คว่าโจรโดนส่งเข้าห้องขังสถานีตำรวจแล้วหรือยัง
-        local tp = intruderHrp.Position
-        if tp.X >= -145 and tp.X <= -95 and tp.Z >= -215 and tp.Z <= -170 then
-            notify({ Title = "🚔 โจรเข้าคุกแล้ว!", Content = intruderPlr.Name .. " ถูกส่งเข้าคุกเรียบร้อย!", Duration = 4 })
-            break
-        end
-
-        local isDirectThief = (intruderPlr:GetAttribute("ThiefFrom") == lp.UserId) or (intruderPlr:GetAttribute("Thief") == true)
-        local distToHome = geo and geo.pondCenter and (tp - geo.pondCenter).Magnitude or 0
-        if not isDirectThief and distToHome > 65.0 then break end
-        if distToHome > 130.0 and hitsLanded >= 3 then break end
-
-        local distToMe = (tp - hrp.Position).Magnitude
-        if distToMe <= 5.5 then
-            hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(tp.X, hrp.Position.Y, tp.Z))
-            zeroVelocity(hrp)
-            Modules.ensureBatEquipped()
-            local batTool = lp.Character and lp.Character:FindFirstChildOfClass("Tool")
-            if batTool and batTool:GetAttribute("Bat") and typeof(batTool.Activate) == "function" then
-                pcall(function() batTool:Activate() end)
+    -- เปิด Noclip ชั่วคราวระหว่างไล่ตี เพื่อให้วิ่งทะลุรั้ว/ตู้ปลา/ขอบหิน/ประตูบ้านได้ทันที ไม่ติดสิ่งกีดขวาง
+    local noclipConn = RunService.Stepped:Connect(function()
+        local ch = lp.Character
+        if ch then
+            for _, part in ipairs(ch:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
             end
-            Input:FireServer("bat")
-            hitsLanded = hitsLanded + 1
-            task.wait(0.58)
-        else
-            local delta = tp - hrp.Position
-            local approachPos = tp - (delta.Magnitude > 0.1 and delta.Unit * 3.2 or Vector3.zero)
-            safeGlideTo(CFrame.lookAt(approachPos, tp), 23.0)
-            task.wait(0.05)
         end
-    end
+    end)
 
-    if CFG.ReturnToGuardPost and geo and geo.guardStandCF then
-        safeGlideTo(geo.guardStandCF, 18.0)
+    local rpTerrain = RaycastParams.new()
+    rpTerrain.FilterDescendantsInstances = { workspace.Terrain }
+    rpTerrain.FilterType = Enum.RaycastFilterType.Include
+    rpTerrain.IgnoreWater = false
+
+    local caughtOrJailed = false
+    local okCombat = pcall(function()
+        Modules.ensureBatEquipped()
+        local chaseStart = os.clock()
+        local lastStepT = chaseStart
+        local lastSwingAt = 0
+        local lastEquipCheck = 0
+        local maxHitsNeeded = (FishingConfig and FishingConfig.Pond and tonumber(FishingConfig.Pond.ThiefHits)) or 3
+        local catchReach = (FishingConfig and FishingConfig.Pond and tonumber(FishingConfig.Pond.CatchReach)) or 7.0
+        local strikeRange = math.max(5.8, catchReach - 0.6) -- ตีแม่นในระยะ 6.4 สตัด (เซิร์ฟเวอร์อนุญาต 7 สตัด)
+        local chaseSpeed = 24.8 -- เร็วกว่าขโมย (15) และวิ่งปกติ (16) แต่ต่ำกว่าสปรินต์เซิร์ฟเวอร์ (26.0) ไม่โดนดีด!
+
+        local wasConfirmedThief = (intruderPlr:GetAttribute("ThiefFrom") == lp.UserId)
+            or (intruderPlr:GetAttribute("Thief") == true)
+            or (tonumber(lp:GetAttribute("PetSpot")) == intruderPlr.UserId)
+
+        while RUNTIME.alive and RUNTIME.isDefendingPond do
+            local now = os.clock()
+            local dt = math.clamp(now - lastStepT, 0.005, 0.05)
+            lastStepT = now
+
+            if not intruderPlr.Parent then break end
+            local tChar = intruderPlr.Character
+            local tHrp = tChar and tChar:FindFirstChild("HumanoidRootPart")
+            local tHum = tChar and tChar:FindFirstChildOfClass("Humanoid")
+            if not (tHrp and tHum and tHum.Health > 0) then break end
+
+            local hrp = getMyHRP()
+            local hum = lp.Character and lp.Character:FindFirstChildOfClass("Humanoid")
+            if not (hrp and hum and hum.Health > 0) then break end
+
+            local tp = tHrp.Position
+            -- 1. เช็คว่าโจรเข้าคุกแล้วหรือยัง
+            if isPosInPoliceJail(tp) then
+                caughtOrJailed = true
+                RUNTIME.thievesJailed = (RUNTIME.thievesJailed or 0) + 1
+                notify({
+                    Title = "🚔 จับโจรเข้าคุกสำเร็จ!",
+                    Content = string.format("%s ถูกฟาดส่งเข้าห้องขังแล้ว! (จับสะสม %d ราย)", intruderPlr.Name, RUNTIME.thievesJailed),
+                    Duration = 5
+                })
+                break
+            end
+
+            -- 2. เช็คสถานะโจรแบบเรียลไทม์
+            local isThiefFromMe = (intruderPlr:GetAttribute("ThiefFrom") == lp.UserId)
+            local isThiefAny = (intruderPlr:GetAttribute("Thief") == true)
+            local isConfirmedThief = isThiefFromMe or isThiefAny or (tonumber(lp:GetAttribute("PetSpot")) == intruderPlr.UserId)
+            if isConfirmedThief then wasConfirmedThief = true end
+
+            local confirmedHits = tonumber(RUNTIME.confirmedHitMap[intruderPlr.Name]) or 0
+            if confirmedHits >= maxHitsNeeded and not isThiefAny then
+                caughtOrJailed = true
+                RUNTIME.thievesJailed = (RUNTIME.thievesJailed or 0) + 1
+                break
+            end
+
+            -- 3. เงื่อนไขหยุดไล่: ถ้าเป็นโจรจริงไล่ได้สูงสุด 45 วิ / ถ้าแค่ผู้บุกรุกธรรมดาและวิ่งหนีออกจากเขตบ้านไปแล้วให้หยุดทันที
+            local elapsed = now - chaseStart
+            if isConfirmedThief then
+                if elapsed > 45.0 then break end
+                local distFromHome = geo and geo.pondCenter and (tp - geo.pondCenter).Magnitude or 0
+                if distFromHome > 520.0 then break end
+            else
+                if wasConfirmedThief and not isThiefAny and elapsed > 2.5 then
+                    break
+                end
+                local stillInPlot = geo and Modules.isPosInsideMyPlot(tp, 18, geo.plotId)
+                local distFromHome = geo and geo.pondCenter and (tp - geo.pondCenter).Magnitude or 999
+                if not stillInPlot and distFromHome > ((CFG.PondGuardRange or 50) + 22) then
+                    break
+                end
+                local isNightSteal = (Lighting.ClockTime >= 18.85 or Lighting.ClockTime < 5.55)
+                if not isNightSteal and elapsed > 10.0 and confirmedHits == 0 then
+                    break
+                end
+                if elapsed > 24.0 then break end
+            end
+
+            -- 4. ถือกะบอง/ไม้ตีติดมือตลอดเวลา
+            if (now - lastEquipCheck) >= 0.25 then
+                lastEquipCheck = now
+                Modules.ensureBatEquipped()
+            end
+
+            -- 5. คำนวณจุดดักหน้าเป้าหมายแบบเรียลไทม์ (Predictive Intercept — แก้บั๊กไล่ตามหลังไม่ทัน!)
+            local myPos = hrp.Position
+            local flatDelta = Vector3.new(tp.X - myPos.X, 0, tp.Z - myPos.Z)
+            local flatDist = flatDelta.Magnitude
+
+            local tVel = tHrp.AssemblyLinearVelocity
+            local leadT = math.clamp(flatDist / 30.0, 0.03, 0.22)
+            local aimX = tp.X + (tVel.X * leadT)
+            local aimZ = tp.Z + (tVel.Z * leadT)
+            local toAim = Vector3.new(aimX - myPos.X, 0, aimZ - myPos.Z)
+            local aimDist = toAim.Magnitude
+
+            -- คงระดับความสูงตามเป้าหมาย (tp.Y) ไม่ให้เด้งขึ้นหลังคาบ้านเวลาไล่ในตัวบ้าน!
+            local terrainHit = workspace:Raycast(Vector3.new(myPos.X, tp.Y + 8, myPos.Z), Vector3.new(0, -24, 0), rpTerrain)
+            local minGroundY = terrainHit and (terrainHit.Position.Y + 2.6) or 5.5
+            local targetY = math.max(tp.Y, minGroundY)
+
+            if flatDist > 2.6 then
+                local dir = (aimDist > 0.05) and toAim.Unit or ((flatDist > 0.05) and flatDelta.Unit or Vector3.new(0, 0, -1))
+                local step = math.min(chaseSpeed * dt, math.max(0, flatDist - 2.2))
+                local nextPos = Vector3.new(myPos.X + dir.X * step, myPos.Y + (targetY - myPos.Y) * math.min(1, dt * 16), myPos.Z + dir.Z * step)
+                hrp.CFrame = CFrame.lookAt(nextPos, Vector3.new(tp.X, nextPos.Y, tp.Z))
+                hrp.AssemblyLinearVelocity = Vector3.new(dir.X * chaseSpeed, 0, dir.Z * chaseSpeed)
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            else
+                -- จ่อติดตัวโจร หันหน้าตรงพร้อมฟาด!
+                local lockPos = Vector3.new(myPos.X, targetY, myPos.Z)
+                hrp.CFrame = CFrame.lookAt(lockPos, Vector3.new(tp.X, targetY, tp.Z))
+                zeroVelocity(hrp)
+            end
+
+            -- 6. ฟาดไม้ตีทันทีที่อยู่ในระยะ 6.4 สตัด (ตรงคูลดาวน์ 0.70 วิ ของ FishingClient ไม่ยิงซ้ำซ้อน)
+            if flatDist <= strikeRange and math.abs(hrp.Position.Y - tp.Y) <= 6.5 and (now - lastSwingAt) >= 0.72 then
+                lastSwingAt = now
+                Modules.ensureBatEquipped()
+                hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(tp.X, hrp.Position.Y, tp.Z))
+                zeroVelocity(hrp)
+                Input:FireServer("bat")
+            end
+
+            RunService.Heartbeat:Wait()
+        end
+    end)
+
+    if noclipConn then noclipConn:Disconnect() end
+    local hrpEnd = getMyHRP()
+    if hrpEnd then zeroVelocity(hrpEnd) end
+
+    -- กลับจุดเฝ้าบ้านหลังไล่โจรจบ (เฉพาะเมื่ออยู่ใกล้บ้าน)
+    if CFG.ReturnToGuardPost and geo and geo.guardStandCF and hrpEnd then
+        local dBack = (hrpEnd.Position - geo.guardStandCF.Position).Magnitude
+        if dBack > 4.0 and dBack <= 180.0 then
+            safeGlideTo(geo.guardStandCF, 20.0)
+        elseif dBack > 180.0 and RUNTIME.isGuardingHomeAtNight then
+            Modules.safeOverlandTravel(geo.guardStandCF, 22.0)
+        end
     end
 
     RUNTIME.isDefendingPond = false
-    if not RUNTIME.isGuardingHomeAtNight and prevAutoFish then
+    RUNTIME.defendingTargetName = nil
+    if not RUNTIME.isGuardingHomeAtNight and prevAutoFish and not RUNTIME.isRecallingForTheft then
         ensureRodEquipped()
         CFG.AutoFish = true
         if RUNTIME.phase == "idle" and not isBusy() then
             task.spawn(doAutoCast)
         end
     end
+    return okCombat and caughtOrJailed
+end
+
+-- ระบบรับสัญญาณขโมยแบบทันที (0ms latency): ไซเรน / สัตว์เลี้ยงแจ้งเตือน / ThiefFrom / การฟาดโดน
+function Modules.onHomeDefenseSignal(kind, data)
+    local now = os.clock()
+    if kind == "siren" then
+        RUNTIME.sirenAlertUntil = now + 22.0
+    elseif (kind == "notice" or kind == "toast" or kind == "announce") and typeof(data) == "table" then
+        local k = tostring(data.k or "")
+        if k == "thief.hitGiven" or k == "thief.hitGivenDrop" then
+            local who = tostring(data.who or RUNTIME.defendingTargetName or "")
+            local hitN = tonumber(data.n) or ((RUNTIME.confirmedHitMap[who] or 0) + 1)
+            if who ~= "" then
+                RUNTIME.confirmedHitMap[who] = hitN
+            end
+            return
+        elseif k == "theft.alarm" or k == "theft.robbed" or k == "theft.sirenYou" then
+            RUNTIME.sirenAlertUntil = now + 28.0
+            notify({
+                Title = "🚨 แจ้งเตือนขโมยบุกบ้าน!",
+                Content = string.format("ตรวจพบเหตุ [%s] ที่บ้านของคุณ!", k),
+                Duration = 5
+            })
+        else
+            return
+        end
+    elseif kind == "pet_spot" and typeof(data) == "number" then
+        RUNTIME.petSpottedThiefId = data
+        RUNTIME.petSpottedUntil = now + 15.0
+    elseif kind == "thief_attr" and typeof(data) == "Instance" then
+        -- คนขโมยปลาจากบ้านเราโดยตรง
+    end
+
+    if not (CFG.PondGuard or CFG.NightHomeDefense or CFG.AutoBeatThieves) then return end
+    if RUNTIME.isDefendingPond or RUNTIME.isRecallingForTheft then return end
+    if (now - (RUNTIME.lastTheftAlertAt or 0)) < 2.0 then return end
+    RUNTIME.lastTheftAlertAt = now
+
+    task.spawn(function()
+        local myPlot = lp:GetAttribute("Plot")
+        local geo = resolvePondGeometry(myPlot)
+        local hrp = getMyHRP()
+        if not (geo and hrp) then return end
+
+        local targetPlr = (typeof(data) == "Instance" and data:IsA("Player")) and data or nil
+        if not targetPlr and typeof(data) == "number" then
+            targetPlr = Players:GetPlayerByUserId(data)
+        end
+        if not targetPlr then
+            targetPlr = select(1, findBestHomeThreat(geo, true, true))
+        end
+
+        local distHome = (hrp.Position - geo.pondCenter).Magnitude
+        local targetDistMe = (targetPlr and targetPlr.Character and targetPlr.Character:FindFirstChild("HumanoidRootPart"))
+            and (targetPlr.Character.HumanoidRootPart.Position - hrp.Position).Magnitude or distHome
+
+        -- กรณีอยู่ใกล้บ้านหรือใกล้โจร (<= 220 สตัด) -> พุ่งเข้าไล่ตีทันที!
+        if targetPlr and math.min(distHome, targetDistMe) <= 220.0 then
+            if isBusy() then
+                RUNTIME.cancelTravelRequested = true
+                task.wait(0.20)
+            end
+            Modules.executePondDefenseCombat(targetPlr, geo, "สัญญาณเตือนขโมยแบบเรียลไทม์!")
+            return
+        end
+
+        -- กรณีตกปลาอยู่ไกลบ้าน (> 220 สตัด) และเปิด AutoRecallOnTheft -> รีบกลับบ้านมาไล่ตีโจรเอาของคืนแล้วกลับหมายเดิม!
+        if CFG.AutoRecallOnTheft and (kind == "siren" or kind == "pet_spot" or kind == "thief_attr" or kind == "notice") then
+            RUNTIME.isRecallingForTheft = true
+            local savedCF = RUNTIME.lastFishingSpotCF or hrp.CFrame
+            local savedAutoFish = CFG.AutoFish
+            CFG.AutoFish = false
+            pcall(function()
+                if Modules.recallAllRodsOnStop then Modules.recallAllRodsOnStop() end
+            end)
+            notify({
+                Title = "🚨 ฉุกเฉิน! มีโจรบุกบ้านขณะออกตกปลา",
+                Content = "กำลังเร่งเดินทางกลับบ้านเพื่อไล่ตีโจรและทวงปลาคืน!",
+                Duration = 5
+            })
+            if isBusy() then
+                RUNTIME.cancelTravelRequested = true
+                task.wait(0.35)
+            end
+
+            local arrived = Modules.boatAutoTravelTo(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), "บ้านของฉัน (ฉุกเฉิน)")
+            if not arrived then
+                Modules.safeOverlandTravel(CFrame.new(geo.pondCenter + Vector3.new(0, 3.0, 0)), 22.0)
+            end
+
+            -- ไล่ตีโจร/ผู้บุกรุกทุกคนที่อยู่ในบ้านจนสะอาด
+            local tScan = os.clock()
+            while RUNTIME.alive and (os.clock() - tScan) < 25.0 do
+                local freshGeo = resolvePondGeometry(myPlot) or geo
+                local th, _, rsn = findBestHomeThreat(freshGeo, true, true)
+                if th then
+                    Modules.executePondDefenseCombat(th, freshGeo, rsn)
+                    task.wait(0.35)
+                else
+                    break
+                end
+            end
+
+            -- กลับไปหมายตกปลาเดิมถ้าไม่ได้อยู่ในโหมดเฝ้าบ้านกลางคืน
+            if not RUNTIME.isGuardingHomeAtNight and savedCF then
+                local curH = getMyHRP()
+                if curH and (curH.Position - savedCF.Position).Magnitude > 45.0 then
+                    notify({ Title = "🎣 เคลียร์โจรเรียบร้อย!", Content = "กำลังกลับไปตกปลาที่หมายเดิม...", Duration = 4 })
+                    Modules.boatAutoTravelTo(savedCF, "หมายตกปลาเดิม", { equipRod = true })
+                    if Modules.ensureSafeWaterFooting then Modules.ensureSafeWaterFooting(savedCF) end
+                end
+            end
+            RUNTIME.isRecallingForTheft = false
+            if not RUNTIME.isGuardingHomeAtNight then
+                CFG.AutoFish = savedAutoFish
+                RUNTIME.lastCastAt = 0
+            end
+        end
+    end)
+end
+
+-- ติดตั้ง Event Listeners สำหรับตรวจจับโจรแบบ 0ms (ThiefFrom, Thief, PetSpot, PetEv)
+function Modules.initHomeDefenseListeners()
+    if RUNTIME._homeDefListenersInit then return end
+    RUNTIME._homeDefListenersInit = true
+
+    local function bindPlayer(plr)
+        if plr == lp then return end
+        table.insert(RUNTIME.connections, plr:GetAttributeChangedSignal("ThiefFrom"):Connect(function()
+            if plr:GetAttribute("ThiefFrom") == lp.UserId then
+                Modules.onHomeDefenseSignal("thief_attr", plr)
+            end
+        end))
+        table.insert(RUNTIME.connections, plr:GetAttributeChangedSignal("Thief"):Connect(function()
+            if plr:GetAttribute("Thief") == true and plr:GetAttribute("ThiefFrom") == lp.UserId then
+                Modules.onHomeDefenseSignal("thief_attr", plr)
+            end
+        end))
+    end
+
+    for _, plr in ipairs(Players:GetPlayers()) do bindPlayer(plr) end
+    table.insert(RUNTIME.connections, Players.PlayerAdded:Connect(bindPlayer))
+
+    table.insert(RUNTIME.connections, lp:GetAttributeChangedSignal("PetSpot"):Connect(function()
+        local uid = tonumber(lp:GetAttribute("PetSpot"))
+        if uid then
+            Modules.onHomeDefenseSignal("pet_spot", uid)
+        end
+    end))
+
+    task.spawn(function()
+        local petEv = rs:WaitForChild("PetEv", 15)
+        if petEv and petEv:IsA("RemoteEvent") then
+            table.insert(RUNTIME.connections, petEv.OnClientEvent:Connect(function(evName, payload)
+                if (evName == "spotted" or evName == "coiled") and typeof(payload) == "table" and tonumber(payload.who) then
+                    Modules.onHomeDefenseSignal("pet_spot", tonumber(payload.who))
+                end
+            end))
+        end
+    end)
+end
+Modules.initHomeDefenseListeners()
+
+-- แสดง ESP ไฮไลต์โจรและผู้บุกรุกในเขตบ้านแบบเรียลไทม์
+function Modules.renderThiefESP(now, playerPos)
+    RUNTIME.thiefVisuals = RUNTIME.thiefVisuals or {}
+    if not CFG.ThiefESP then
+        for _, v in pairs(RUNTIME.thiefVisuals) do
+            pcall(function()
+                if v.gui then v.gui:Destroy() end
+                if v.hl then v.hl:Destroy() end
+                if v.att then v.att:Destroy() end
+            end)
+        end
+        table.clear(RUNTIME.thiefVisuals)
+        return
+    end
+
+    local myPlot = tonumber(lp:GetAttribute("Plot"))
+    local activeSet = {}
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= lp and plr.Character then
+            local pHrp = plr.Character:FindFirstChild("HumanoidRootPart")
+            if pHrp then
+                local pPos = pHrp.Position
+                local isMyThief = (plr:GetAttribute("ThiefFrom") == lp.UserId)
+                local isThief = (plr:GetAttribute("Thief") == true)
+                local inPlot = myPlot and Modules.isPosInsideMyPlot(pPos, 6, myPlot) or false
+                if (isMyThief or isThief or inPlot) and not isPosInPoliceJail(pPos) then
+                    local uid = plr.UserId
+                    activeSet[uid] = true
+                    local v = RUNTIME.thiefVisuals[uid]
+                    if not v or not (v.att and v.att.Parent == pHrp) then
+                        if v then
+                            pcall(function() if v.gui then v.gui:Destroy() end if v.hl then v.hl:Destroy() end if v.att then v.att:Destroy() end end)
+                        end
+                        local att = Instance.new("Attachment", pHrp)
+                        local bb = Instance.new("BillboardGui", espFolder)
+                        bb.Name = "ThiefESP_" .. tostring(uid)
+                        bb.Adornee, bb.Size, bb.StudsOffset, bb.MaxDistance, bb.AlwaysOnTop = att, UDim2.fromOffset(180, 44), Vector3.new(0, 4.2, 0), 4000, true
+                        local frame = Instance.new("Frame", bb)
+                        frame.Size, frame.BackgroundColor3, frame.BackgroundTransparency, frame.BorderSizePixel = UDim2.fromScale(1, 1), Color3.fromRGB(35, 8, 12), 0.15, 0
+                        Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+                        local st = Instance.new("UIStroke", frame)
+                        st.Thickness, st.Color = 2.0, isMyThief and Color3.fromRGB(255, 30, 50) or Color3.fromRGB(255, 160, 30)
+                        local lbl = Instance.new("TextLabel", frame)
+                        lbl.Size, lbl.BackgroundTransparency, lbl.Font, lbl.TextSize, lbl.TextColor3 = UDim2.fromScale(1, 1), 1, Enum.Font.GothamBold, 11, Color3.new(1, 1, 1)
+                        local hl = Instance.new("Highlight", plr.Character)
+                        hl.Name = "HunterSuite_ThiefHL"
+                        hl.FillColor = isMyThief and Color3.fromRGB(255, 25, 45) or Color3.fromRGB(255, 150, 30)
+                        hl.OutlineColor = Color3.new(1, 1, 1)
+                        hl.FillTransparency = 0.45
+                        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                        v = { att = att, gui = bb, label = lbl, hl = hl, stroke = st }
+                        RUNTIME.thiefVisuals[uid] = v
+                    end
+                    local dist = math.floor((pPos - playerPos).Magnitude)
+                    local tag = isMyThief and "🚨 โจรขโมยบ้านคุณ!" or (isThief and "⚠️ หัวขโมย" or "👀 บุกรุกเขตบ้าน!")
+                    v.label.Text = string.format("%s
+%s (%d ม.)", tag, plr.Name, dist)
+                end
+            end
+        end
+    end
+
+    for uid, v in pairs(RUNTIME.thiefVisuals) do
+        if not activeSet[uid] then
+            pcall(function()
+                if v.gui then v.gui:Destroy() end
+                if v.hl then v.hl:Destroy() end
+                if v.att then v.att:Destroy() end
+            end)
+            RUNTIME.thiefVisuals[uid] = nil
+        end
+    end
 end
 
 function Modules.updatePondGuardEngine(now)
-    if not (CFG.PondGuard or CFG.NightHomeDefense) then return end
+    if not (CFG.PondGuard or CFG.NightHomeDefense or CFG.AutoBeatThieves) then return end
+    if RUNTIME.isDefendingPond or RUNTIME.isRecallingForTheft then return end
     if isBusy() and RUNTIME.busyMode ~= "pondGuard" then return end
-    if (now - (RUNTIME.lastPondGuardCheckAt or 0)) < 0.50 then return end
+    if (now - (RUNTIME.lastPondGuardCheckAt or 0)) < 0.18 then return end
     RUNTIME.lastPondGuardCheckAt = now
 
     local myPlot = lp:GetAttribute("Plot")
@@ -7551,8 +8089,8 @@ function Modules.updatePondGuardEngine(now)
     if not hrp then return end
 
     local clockTime = Lighting.ClockTime
-    local needGoHome = (clockTime >= 18.35 or clockTime < 5.55)   -- เริ่มขับเรือกลับบ้าน 18:20 เฝ้าจน 05:33
-    local isStealWindow = (clockTime >= 18.85 or clockTime < 5.55)
+    local needGoHome = (clockTime >= 18.35 or clockTime < 5.55)
+    local isStealWindow = (clockTime >= 18.75 or clockTime < 5.55)
     local isMorning = (clockTime >= 5.55 and clockTime < 18.35)
 
     -- [SUB-ROUTINE 0]: ระบบกลับบ้านเฝ้ากลางคืนอัตโนมัติ (อยู่ที่ไหนก็ตามรวมอ่างเก็บน้ำ -> กลับบ้านเฝ้า -> เช้ากลับหมายเดิม)
@@ -7569,14 +8107,13 @@ function Modules.updatePondGuardEngine(now)
                     if Modules.recallAllRodsOnStop then Modules.recallAllRodsOnStop() end
                     notify({
                         Title = "🌙 เวลาเฝ้าบ้าน · กำลังเดินทางกลับบ้าน!",
-                        Content = "วางแผนเส้นทางข้ามโซนอัตโนมัติ (เรือ + มอเตอร์ไซค์/รถ 50 studs/s ข้ามเขื่อน/สะพาน) กลับเฝ้าบ้าน",
+                        Content = "วางแผนเส้นทางข้ามโซนอัตโนมัติ (เรือ + มอเตอร์ไซค์/รถ A* หลบนา) กลับเฝ้าบ้าน",
                         Duration = 5
                     })
                     local arrived = Modules.boatAutoTravelTo(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), "บ้านของฉัน")
                     local curHrp = getMyHRP()
                     local atHome = curHrp and (curHrp.Position - homePos).Magnitude <= 95.0
                     if not atHome and curHrp then
-                        -- สำรองฉุกเฉิน: วิ่งบนบกตรงไปบ้านจนถึงแน่นอน
                         Modules.safeOverlandTravel(CFrame.new(homePos + Vector3.new(0, 3.0, 0)), 22.0)
                         curHrp = getMyHRP()
                         atHome = curHrp and (curHrp.Position - homePos).Magnitude <= 95.0
@@ -7587,9 +8124,8 @@ function Modules.updatePondGuardEngine(now)
                         local g = resolvePondGeometry(myPlot)
                         if g and g.guardStandCF then safeGlideTo(g.guardStandCF, 18.0) end
                         Modules.ensureBatEquipped()
-                        notify({ Title = "🛡️ ถึงบ้านแล้ว · เฝ้าบ้านพร้อมตีโจร!", Content = "กำลังเฝ้าบ่อดินและตู้ปลาข้างนอกทุกใบจนถึง 05:35 น.", Duration = 4 })
+                        notify({ Title = "🛡️ ถึงบ้านแล้ว · เฝ้าบ้านพร้อมตีโจร!", Content = "กำลังเฝ้าบ่อดินและตู้ปลาทุกใบในเขตบ้านจนถึง 05:35 น.", Duration = 4 })
                     else
-                        -- หากยังไปไม่ถึงจริง ไม่ล็อกค้างไว้ ให้ลองใหม่รอบหน้าได้
                         RUNTIME.isGuardingHomeAtNight = false
                     end
                 end)
@@ -7641,7 +8177,7 @@ function Modules.updatePondGuardEngine(now)
     if geo.guardStandCF then RUNTIME.guardStandCF = geo.guardStandCF end
 
     -- [SUB-ROUTINE 1]: เก็บเงินบ่อดินยามเช้า (กรณียืนอยู่ใกล้บ้านอยู่แล้ว)
-    if CFG.AutoMorningCollect and isMorning and (RUNTIME.wasNight or (now - (RUNTIME.lastPondCollectAt or 0)) >= 60.0) then
+    if (CFG.PondGuard or CFG.NightHomeDefense) and CFG.AutoMorningCollect and isMorning and (RUNTIME.wasNight or (now - (RUNTIME.lastPondCollectAt or 0)) >= 60.0) then
         local distToCash = geo.cashPos and (hrp.Position - geo.cashPos).Magnitude or 999
         if distToCash <= 35.0 then
             Input:FireServer("pondCash")
@@ -7661,35 +8197,18 @@ function Modules.updatePondGuardEngine(now)
         RUNTIME.wasNight = true
     end
 
-    -- [SUB-ROUTINE 2]: ตรวจจับโจรทั้งรอบบ่อดินและตู้ปลาข้างนอกทุกใบ (รวมตู้ใส่แม่กุญแจ)
-    if CFG.AutoBeatThieves and not RUNTIME.isDefendingPond and (hrp.Position - geo.pondCenter).Magnitude <= 145 then
-        local targetPlr, threatLevel = nil, 0
-        local maxRange = CFG.PondGuardRange or 35.0
-
-        for _, plr in ipairs(Players:GetPlayers()) do
-            if plr ~= lp and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
-                local pPos = plr.Character.HumanoidRootPart.Position
-                local pHum = plr.Character:FindFirstChildOfClass("Humanoid")
-                if pHum and pHum.Health > 0 then
-                    local minSpotDist = math.huge
-                    for _, sp in ipairs(geo.defendedSpots) do
-                        local d = (pPos - sp.pos).Magnitude
-                        if d < minSpotDist then minSpotDist = d end
-                    end
-
-                    if plr:GetAttribute("ThiefFrom") == lp.UserId then
-                        targetPlr, threatLevel = plr, 3; break
-                    elseif plr:GetAttribute("Thief") == true and minSpotDist <= 55.0 and threatLevel < 2 then
-                        targetPlr, threatLevel = plr, 2
-                    elseif isStealWindow and minSpotDist <= maxRange and threatLevel < 1 then
-                        targetPlr, threatLevel = plr, 1
-                    end
-                end
-            end
-        end
+    -- [SUB-ROUTINE 2]: ตรวจจับโจรและผู้บุกรุกทั้งเขตแปลงบ้าน 220x220 + ทุกตู้ปลา + บ่อดิน (สแกนทุก 0.18 วิ!)
+    if CFG.AutoBeatThieves and (CFG.PondGuard or CFG.NightHomeDefense) then
+        local distMeHome = (hrp.Position - geo.pondCenter).Magnitude
+        local nearHome = (distMeHome <= 220.0) or Modules.isPosInsideMyPlot(hrp.Position, 45, myPlot)
+        local targetPlr, score, reason = findBestHomeThreat(geo, isStealWindow, CFG.AutoRecallOnTheft == true)
 
         if targetPlr then
-            task.spawn(Modules.executePondDefenseCombat, targetPlr, geo)
+            if nearHome then
+                task.spawn(Modules.executePondDefenseCombat, targetPlr, geo, reason)
+            elseif CFG.AutoRecallOnTheft and score >= 650 then
+                Modules.onHomeDefenseSignal("thief_attr", targetPlr)
+            end
         end
     end
 end
@@ -7834,6 +8353,7 @@ function Modules.updateAntiStuckWatchdog(now)
         RUNTIME.isBridging, RUNTIME.bridgeStartedAt = false, 0
         RUNTIME.isSelling, RUNTIME.sellStartedAt = false, 0
         RUNTIME.isPilotingBoat, RUNTIME.isRoundTripping, RUNTIME.isSiphoningPonds = false, false, false
+        RUNTIME.cancelTravelRequested = true
         RUNTIME.isDrivingMoto = false
         RUNTIME.motoAutoCtrl = nil
         RUNTIME.boatAutoTarget = nil
@@ -9541,6 +10061,16 @@ task.spawn(function()
     end
 end)
 
+-- ลูปเรดาร์กันขโมยความเร็วสูง (สแกนผู้บุกรุกเขตบ้าน 220x220 ทุก 0.18 วิ)
+task.spawn(function()
+    while RUNTIME.alive do
+        task.wait(0.18)
+        if CFG.PondGuard or CFG.NightHomeDefense then
+            pcall(Modules.updatePondGuardEngine, os.clock())
+        end
+    end
+end)
+
 -- =========================================================================
 -- FLUENT UI TABS
 -- =========================================================================
@@ -10357,7 +10887,7 @@ Tabs.Automation:AddDropdown("MotoPreferenceSelect", {
 }):OnChanged(function(v) CFG.MotoPreference = v end)
 Tabs.Automation:AddSlider("MotoMinDistSlider", {
     Title = "ระยะทางบนบกขั้นต่ำที่จะเรียกรถ (สตัด)",
-    Default = 90, Min = 50, Max = 250, Rounding = 0
+    Default = 65, Min = 40, Max = 250, Rounding = 0
 }):OnChanged(function(v) CFG.MotoMinDistance = v end)
 Tabs.Automation:AddButton({
     Title = "🏍️ เรียกรถที่เลือกออกมาทันที (Spawn Moto/Car)",
@@ -10390,17 +10920,46 @@ Tabs.Automation:AddButton({
     end
 })
 
-Tabs.Automation:AddSection("🛡️ เฝ้าบ้าน ป้องกันบ่อดิน + ตู้ปลาข้างนอก & ตีโจรเข้าคุก")
+Tabs.Automation:AddSection("🛡️ ระบบกันขโมย & เฝ้าบ้านขั้นสุดยอด (Ultimate Home Defense)")
+RUNTIME.pDefenseStatus = Tabs.Automation:AddParagraph({
+    Title = "🚨 สถานะระบบกันขโมยสด",
+    Content = "พร้อมเฝ้าบ้าน · ตรวจจับเขตแปลงบ้าน 220x220 + บ่อดิน + ตู้ปลาทุกใบ"
+})
+Tabs.Automation:AddToggle("PondGuardMaster", {
+    Title = "🛡️ เปิดระบบกันขโมยเฝ้าบ้าน (ทั้งเขตบ้าน 220x220 + ทุกตู้ปลา + บ่อดิน)",
+    Description = "ตรวจจับผู้บุกรุกและโจรแบบ 0ms (ThiefFrom / ไซเรน / สัตว์เลี้ยง / เขตบ้าน) พร้อมไล่ล่า 60fps ทะลุสิ่งกีดขวางไม่ติดหลังคา",
+    Default = true
+}):OnChanged(function(v) CFG.PondGuard = v end)
+Tabs.Automation:AddToggle("AutoBeatThieves", {
+    Title = "🏏 ไล่ตีโจรอัตโนมัติจนเข้าคุก (3 ที · ไม่ปล่อยหลุด)",
+    Default = true
+}):OnChanged(function(v) CFG.AutoBeatThieves = v end)
+Tabs.Automation:AddToggle("BeatPlotIntrudersToggle", {
+    Title = "⚡ ไล่ตีทันทีที่เดินเข้าเขตบ้าน (ไม่ต้องรอให้ขโมยก่อน)",
+    Description = "ตรวจจับทุกคนที่เหยียบเข้าแปลงบ้านของคุณ (220x220 สตัด) หรือเข้าใกล้ตู้ปลา/บ่อดิน",
+    Default = true
+}):OnChanged(function(v) CFG.BeatPlotIntruders = v end)
+Tabs.Automation:AddToggle("Intruder24hModeToggle", {
+    Title = "🕒 ไล่ผู้บุกรุกในเขตบ้านตลอด 24 ชม. (ปิด = เฉพาะกลางคืน 18:45–05:35)",
+    Default = true
+}):OnChanged(function(v) CFG.Intruder24hMode = v end)
+Tabs.Automation:AddToggle("AutoRecallOnTheftToggle", {
+    Title = "🚀 วาร์ป/ขับรถกลับบ้านฉุกเฉินทันทีเมื่อมีโจรขโมยขณะออกตกปลา",
+    Description = "เมื่อไซเรนดัง / สัตว์เลี้ยงแจ้งเตือน / มีคนขโมยปลาจากบ้าน จะหยุดตกปลา รีบกลับบ้านไล่ตีเอาของคืน แล้วกลับหมายเดิม",
+    Default = true
+}):OnChanged(function(v) CFG.AutoRecallOnTheft = v end)
+Tabs.Automation:AddToggle("ThiefESPToggle", {
+    Title = "👁️ ไฮไลต์สีแดง + แจ้งระยะโจรและผู้บุกรุกในเขตบ้าน (Thief ESP)",
+    Default = true
+}):OnChanged(function(v) CFG.ThiefESP = v end)
 Tabs.Automation:AddToggle("NightHomeDefenseToggle", {
-    Title = "🌙 กันบ้านอัตโนมัติตอนกลางคืน (18:20 กลับบ้าน → เช้ากลับหมายเดิม)",
-    Description = "ไม่ว่าจะตกปลาอยู่ที่ไหน พอใกล้ค่ำจะเก็บเบ็ดล่องเรือกลับบ้านเฝ้าบ่อดินและตู้ปลาข้างนอกจนเช้า แล้วล่องเรือกลับหมายเดิมอัตโนมัติ",
+    Title = "🌙 กลับบ้านเฝ้ากลางคืนอัตโนมัติ (18:20 กลับบ้าน → เช้ากลับหมายเดิม)",
+    Description = "ไม่ว่าจะตกปลาอยู่ที่ไหน พอใกล้ค่ำจะเก็บเบ็ดล่องเรือ/ขับรถกลับบ้านเฝ้าจนเช้า แล้วกลับหมายเดิมอัตโนมัติ",
     Default = false
 }):OnChanged(function(v) CFG.NightHomeDefense = v; if not v then RUNTIME.isGuardingHomeAtNight = false; RUNTIME.isReturningHomeForNight = false end end)
-Tabs.Automation:AddToggle("PondGuardMaster", { Title = "เปิดระบบเฝ้าบ่อ & ตู้ปลาข้างนอก 24 ชม.", Default = false }):OnChanged(function(v) CFG.PondGuard = v end)
-Tabs.Automation:AddToggle("AutoBeatThieves", { Title = "🏏 ตีโจรอัตโนมัติจนเข้าคุก (3 ที)", Default = true }):OnChanged(function(v) CFG.AutoBeatThieves = v end)
 Tabs.Automation:AddToggle("AutoMorningCollect", { Title = "🌅 เก็บเงินบ่อดินยามเช้าอัตโนมัติ", Default = true }):OnChanged(function(v) CFG.AutoMorningCollect = v end)
 Tabs.Automation:AddToggle("AutoFeedPond", { Title = "🐟 ให้อาหารปลาบ่อดินอัตโนมัติ", Default = true }):OnChanged(function(v) CFG.AutoFeedPond = v end)
-Tabs.Automation:AddSlider("PondGuardRange", { Title = "ระยะตรวจจับรอบบ่อและตู้ปลา (สตัด)", Default = 35, Min = 15, Max = 60, Rounding = 0 }):OnChanged(function(v) CFG.PondGuardRange = v end)
+Tabs.Automation:AddSlider("PondGuardRange", { Title = "ระยะตรวจจับรอบบ่อและตู้ปลา (สตัด)", Default = 50, Min = 20, Max = 120, Rounding = 0 }):OnChanged(function(v) CFG.PondGuardRange = v end)
 Tabs.Automation:AddToggle("ReturnToGuardPost", { Title = "เดินกลับจุดเฝ้าบ้านหลังไล่โจรเสร็จ", Default = true }):OnChanged(function(v) CFG.ReturnToGuardPost = v end)
 Tabs.Automation:AddButton({
     Title = "📍 ล่องเรือไปจุดเฝ้าบ้านทันที",
@@ -10586,7 +11145,9 @@ end)
 task.spawn(function()
     while RUNTIME.alive do
         local phaseText = tostring(RUNTIME.phase)
-        if RUNTIME.isDrivingMoto then phaseText = "🏍️ กำลังขับรถเดินทางบนบก"
+        if RUNTIME.isDefendingPond then phaseText = "🏏 กำลังไล่ตีโจร: " .. tostring(RUNTIME.defendingTargetName or "ผู้บุกรุก")
+        elseif RUNTIME.isRecallingForTheft then phaseText = "🚨 ฉุกเฉิน! กำลังรีบกลับบ้านไปตีโจร"
+        elseif RUNTIME.isDrivingMoto then phaseText = "🏍️ กำลังขับรถเดินทางบนบก"
         elseif RUNTIME.isRoundTripping then phaseText = "🚤 กำลังเดินทางไป-กลับตลาด"
         elseif RUNTIME.isPilotingBoat then phaseText = "🚤 กำลังขับเรือไปหมายปลายทาง"
         elseif RUNTIME.isBridging then phaseText = "🔄 กำลังเชื่อมต่อร้านค้า/ตู้เซฟ"
@@ -10625,6 +11186,25 @@ task.spawn(function()
             local o2Pct = math.floor(math.clamp(o2Chg / o2Cap, 0, 1) * 100 + 0.5)
             RUNTIME.pEconomy:SetDesc(string.format("เหรียญ: $%s | ถังปลา: %d/%d ตัว | O2: %d%% | ตกได้: %d ตัว",
                 formatNumber(money), lp:GetAttribute("BucketN") or 0, getBucketCap(), o2Pct, RUNTIME.totalCatches or 0))
+        end
+
+        if RUNTIME.pDefenseStatus then
+            local myPlot = tonumber(lp:GetAttribute("Plot"))
+            local intruderN = 0
+            if myPlot then
+                for _, plr in ipairs(Players:GetPlayers()) do
+                    if plr ~= lp and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+                        local pp = plr.Character.HumanoidRootPart.Position
+                        if plr:GetAttribute("ThiefFrom") == lp.UserId or Modules.isPosInsideMyPlot(pp, 8, myPlot) then
+                            intruderN = intruderN + 1
+                        end
+                    end
+                end
+            end
+            local defState = RUNTIME.isDefendingPond and ("🏏 กำลังไล่ตี: " .. tostring(RUNTIME.defendingTargetName or "โจร"))
+                or (RUNTIME.isRecallingForTheft and "🚨 กำลังรีบกลับบ้าน!" or (CFG.PondGuard and "🟢 เฝ้าระวังอยู่" or "⚪ ปิดอยู่"))
+            RUNTIME.pDefenseStatus:SetDesc(string.format("%s | ผู้บุกรุกในบ้าน: %d คน | จับเข้าคุกแล้ว: %d ราย",
+                defState, intruderN, RUNTIME.thievesJailed or 0))
         end
 
         if RUNTIME.loyPointsLabel and RUNTIME.loyStateData then
@@ -10669,6 +11249,10 @@ RUNTIME.boatNearLineFn = nil
     RUNTIME.fightActive, RUNTIME.tugActive, RUNTIME.isBridging, RUNTIME.isSelling = false, false, false, false
     RUNTIME.isPilotingBoat, RUNTIME.isDrivingMoto, RUNTIME.isRoundTripping, RUNTIME.bossHuntActive = false, false, false, false
     RUNTIME.isSiphoningPonds = false
+    RUNTIME.isDefendingPond = false
+    RUNTIME.isRecallingForTheft = false
+    RUNTIME.motoRail = nil
+    pcall(function() RunService:UnbindFromRenderStep("HunterSuite_MotoRail") end)
     RUNTIME.activeMove, RUNTIME.activeBoss, RUNTIME.bridgeStartedAt, RUNTIME.sellStartedAt = nil, nil, 0, 0
     fightStateTable, tugStateTable, reelStateTable, rodStateTable = nil, nil, nil, nil
     cachedPrompts = {}
@@ -10779,7 +11363,7 @@ end)
 syncGameLanguage()
 Fluent:SetTheme(InterfaceManager.Settings.Theme or "Amethyst")
 Window:SelectTab(1)
-notify({ Title = "ZeluxHub v4.7 โหลดสำเร็จ!", Content = "Precision Economy & Teleport Engine พร้อมใช้งาน", Duration = 5 })
+notify({ Title = "ZeluxHub v5.0 โหลดสำเร็จ!", Content = "Precision Economy & Teleport Engine พร้อมใช้งาน", Duration = 5 })
 pcall(function() SaveManager:LoadAutoloadConfig() end)
 local liveStartLure = getLiveGameLure()
 if liveStartLure then
