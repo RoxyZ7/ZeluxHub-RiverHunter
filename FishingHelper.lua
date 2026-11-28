@@ -39,7 +39,7 @@ end
 local SaveManager=loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
 local InterfaceManager=loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
 local Window=Fluent:CreateWindow({
-Title="ZeluxHub v5.7",
+Title="ZeluxHub v5.8",
 SubTitle="ZeluxHub-River Hunter · Precision Economy, Loy Krathong Event & Auto Suite",
 TabWidth=165,
 Size=UDim2.fromOffset(620,520),
@@ -1003,6 +1003,7 @@ BottomBellPriorityCut=false,
 AutoPoleGame=true,
 PoleSweetSpot=0.65,
 PoleTapCooldown=0.18,
+PoleTwitchCadence=2.2,
 PoleAutoNaturalBait=true,
 }
 local Modules={}
@@ -1372,6 +1373,23 @@ return true
 end
 return false
 end
+isPoleRodEquipped=function()
+local char=lp.Character
+local cur=char and char:FindFirstChildOfClass("Tool")
+if cur then
+local toolRod=cur:GetAttribute("Rod")or cur:GetAttribute("RodId")or cur.Name
+if typeof(toolRod)=="string" and toolRod:lower():find("pole",1,true)then
+return true
+end
+end
+local gear=Modules.getClientGearTable and Modules.getClientGearTable()
+local rodId=(gear and typeof(gear.rod)=="string" and gear.rod~="" and gear.rod)
+or tostring(lp:GetAttribute("Rod")or lp:GetAttribute("RodLook")or "")
+if rodId:lower():find("pole",1,true)then return true end
+local cfg=FishingConfig and FishingConfig.Rods and FishingConfig.Rods[rodId]
+return cfg~=nil and cfg.Type=="pole"
+end
+Modules.isPoleRodEquipped=isPoleRodEquipped
 local function isLureIdNatural(lureId)
 if not lureId then return false end
 local cfg=FishingConfig.Lures and FishingConfig.Lures[lureId]
@@ -4467,20 +4485,33 @@ local gear=Modules.getClientGearTable and Modules.getClientGearTable()
 local curReelId=(gear and gear.reel)or lp:GetAttribute("Reel")or "spin1"
 local reelKind=FishingConfig.Reels and FishingConfig.Reels[curReelId]
 local isPole=isPoleRodEquipped and isPoleRodEquipped()
-local timingQuality=(isPole or(reelKind and(reelKind.Kind=="bait" or reelKind.Kind=="round")))and "perfect" or nil
+local timingQuality=(not isPole and(reelKind and(reelKind.Kind=="bait" or reelKind.Kind=="round")))and "perfect" or nil
 if isPole then
-if CFG.PoleAutoNaturalBait~=false and not isLureIdNatural(actualLure)then
-for _,natLure in ipairs({"worm","bread","dough","paste","cricket"})do
-if getBaitCount(natLure)and getBaitCount(natLure)>0 then
-actualLure=natLure
-CFG.SelectedLure=natLure
-applyLureServer(natLure)
-task.wait(0.06)
+local curLure=actualLure
+if CFG.PoleAutoNaturalBait~=false and not isLureIdNatural(curLure)then
+local foundNat=nil
+local VALID_NATURAL_BAITS={"worm","bread","bran","pellet","shrimp","chunk","livebarb","livefrog","livecat"}
+for _,natLure in ipairs(VALID_NATURAL_BAITS)do
+local cnt=getBaitCount(natLure)
+if cnt and cnt>0 then
+foundNat=natLure
 break
 end
 end
+if foundNat then
+actualLure=foundNat
+CFG.SelectedLure=foundNat
+applyLureServer(foundNat)
+task.wait(0.08)
+else
+notify({
+Title="⚠️ คันชิงหลิวต้องใช้เหยื่อสด!",
+Content="ไม่พบเหยื่อสด (ไส้เดือน/รำ/ขนมปัง/กุ้ง) ในกระเป๋า กรุณาซื้อเหยื่อสดก่อนตก",
+Duration=4
+})
 end
-power=math.clamp(power,0.45,0.82)
+end
+power=math.clamp(power,0.45,0.75)
 end
 playCastAudio()
 Cast:FireServer(power,dir,actualLure,timingQuality,CFG.SkipCastCover==true)
@@ -4619,8 +4650,13 @@ if isBusy()then return end
 if isPoleRodEquipped and isPoleRodEquipped()then
 sendReel(0,true)
 setSteer(0,true)
+if not RUNTIME.isNibbling and(now-(RUNTIME.lastTwitch or 0))>=(CFG.PoleTwitchCadence or 2.2)then
+RUNTIME.lastTwitch=now
+triggerRodTwitch()
+Input:FireServer("jerk")
+end
 local timeInLure=now-(RUNTIME.lureEnteredAt or now)
-if timeInLure>32.0 and not RUNTIME.cancellingLure then
+if timeInLure>36.0 and not RUNTIME.cancellingLure then
 RUNTIME.cancellingLure=true
 RUNTIME.idleLockUntil=now+0.8
 pcall(function()Input:FireServer("cancel")end)
@@ -4932,12 +4968,22 @@ return false
 end
 local function stepFastTug()
 if not(RUNTIME.alive and CFG.AutoFish and CFG.AutoFight)then return end
+local curPh=RUNTIME.phase or lp:GetAttribute("FishPhase")or "idle"
+if curPh~="fight" then return end
 local now=os.clock()
-if RUNTIME.poleGame and RUNTIME.poleGame.active then
+if isPoleRodEquipped and isPoleRodEquipped()then
+if CFG.AutoPoleGame~=false and RUNTIME.poleGame and RUNTIME.poleGame.active then
 stepPoleGame(now)
 return
 end
-if RUNTIME.phase~="fight" and lp:GetAttribute("FishPhase")~="fight" then return end
+local dt=now-(RUNTIME.fightTimers.lastPoleLift or 0)
+if dt>=(1/12)then
+RUNTIME.fightTimers.lastPoleLift=now
+Input:FireServer("pull",dt)
+triggerRodTwitch()
+end
+return
+end
 local ts=getTugStateTable()
 local d=RUNTIME.lastTick
 local isTug=RUNTIME.tugActive
@@ -5054,16 +5100,6 @@ local function updateFightStateMachine(now,d,ph,timers)
 if isPoleRodEquipped and isPoleRodEquipped()then
 sendReel(0,true)
 setSteer(0)
-if CFG.AutoPoleGame~=false and RUNTIME.poleGame and RUNTIME.poleGame.active then
-stepPoleGame(now)
-return
-end
-if(now-(timers.lastPoleLift or 0))>=0.38 then
-timers.lastPoleLift=now
-Input:FireServer("pull",0.08)
-Input:FireServer("jerk")
-triggerRodTwitch()
-end
 return
 end
 local fs,ts=getFightStateTable(),getTugStateTable()
@@ -5302,6 +5338,9 @@ elseif ev=="poletap" and typeof(d)=="table" then
 if d.hits~=nil then RUNTIME.poleGame.hits=tonumber(d.hits)or 0 end
 if d.misses~=nil then RUNTIME.poleGame.misses=tonumber(d.misses)or 0 end
 return
+elseif ev=="poleend" then
+RUNTIME.poleGame.active=false
+return
 end
 if Modules.onBottomStateEvent then
 pcall(Modules.onBottomStateEvent,ev,d)
@@ -5320,7 +5359,9 @@ rst.holdT=0
 rst.crankRate=0
 rst.reelSent=0
 end
+if not(isPoleRodEquipped and isPoleRodEquipped())then
 Input:FireServer("reel",0)
+end
 return
 elseif ev=="cast" then
 handlePhaseChange("flight")
@@ -8975,14 +9016,6 @@ local rodId=getEquippedRodId()
 local cfg=FishingConfig.Rods and FishingConfig.Rods[rodId]
 return(cfg and cfg.Type)or "cast"
 end
-isPoleRodEquipped=function()
-local rodId=getEquippedRodId()
-if not rodId then return false end
-if rodId:find("pole",1,true)then return true end
-local cfg=FishingConfig.Rods and FishingConfig.Rods[rodId]
-return cfg~=nil and cfg.Type=="pole"
-end
-Modules.isPoleRodEquipped=isPoleRodEquipped
 local function isBottomRodEquipped()
 return getEquippedRodType()=="bottom"
 end
@@ -9949,8 +9982,8 @@ Default=true
 end
 Tabs.Fishing:AddSection("🎋 เซียนชิงหลิวอัตโนมัติ (Telescopic Pole Rod Engine)")
 Tabs.Fishing:AddToggle("AutoPoleGame",{
-Title="เปิดระบบมินิเกมชิงหลิวอัตโนมัติ (TimingGame Solver)",
-Description="คำนวณตำแหน่งปลาแกว่งด้วย TimingGame.poleX และเคาะ poletap เข้าจุดกึ่งกลาง 100%",
+Title="เปิดระบบมินิเกมชิงหลิวอัตโนมัติ (TimingGame & Fast Lift)",
+Description="คำนวณตำแหน่งปลาแกว่งด้วย TimingGame.poleX และเคาะ poletap เข้าจุดกึ่งกลาง 100% พร้อมโหมดยกปลา 12 CPS",
 Default=true
 }):OnChanged(function(v)CFG.AutoPoleGame=v end)
 Tabs.Fishing:AddSlider("PoleSweetSpot",{
@@ -9963,9 +9996,14 @@ Title="ระยะหน่วงเคาะชิงหลิว (วิน�
 Description="เซิร์ฟเวอร์จำกัดขั้นต่ำ 0.15s (ค่าแนะนำ 0.16s - 0.20s)",
 Default=0.18,Min=0.15,Max=0.35,Rounding=2
 }):OnChanged(function(v)CFG.PoleTapCooldown=v end)
+Tabs.Fishing:AddSlider("PoleTwitchCadence",{
+Title="ระยะความถี่กระตุกทุ่นในน้ำ (วินาที)",
+Description="กระตุกทุ่นเรียกปลาเข้ากินเหยื่ออัตโนมัติ (ค่าเริ่มต้น 2.2 วินาที)",
+Default=2.2,Min=1.4,Max=4.5,Rounding=1
+}):OnChanged(function(v)CFG.PoleTwitchCadence=v end)
 Tabs.Fishing:AddToggle("PoleAutoNaturalBait",{
 Title="บังคับใช้เหยื่อสดสำหรับชิงหลิวอัตโนมัติ",
-Description="หากถือคันชิงหลิวจะเลือกเหยื่อสด (ไส้เดือน/ขนมปัง/รำ) ทันที",
+Description="หากถือคันชิงหลิวจะเลือกเหยื่อสด (ไส้เดือน/ขนมปัง/รำ/กุ้ง) อัตโนมัติ",
 Default=true
 }):OnChanged(function(v)CFG.PoleAutoNaturalBait=v end)
 local POLE_OPTIONS={
@@ -10902,7 +10940,7 @@ end)
 syncGameLanguage()
 Fluent:SetTheme(InterfaceManager.Settings.Theme or "Amethyst")
 Window:SelectTab(1)
-notify({Title="ZeluxHub v5.7 โหลดสำเร็จ!",Content="Precision Economy & Teleport Engine พร้อมใช้งาน",Duration=5})
+notify({Title="ZeluxHub v5.8 โหลดสำเร็จ!",Content="Precision Economy & Teleport Engine พร้อมใช้งาน",Duration=5})
 pcall(function()SaveManager:LoadAutoloadConfig()end)
 local liveStartLure=getLiveGameLure()
 if liveStartLure then
