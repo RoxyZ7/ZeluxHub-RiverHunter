@@ -1,0 +1,33 @@
+# Developer source code (Keep secret, do not commit to public repo)
+FishingHelper_dev.lua
+FishingHelper.lua.bak*
+*.bak*
+
+# Environment & Agent data
+.agents/
+.gemini/
+LocalAIAgent/
+scratch/
+real-mcp-bundle/
+
+# Dumps & Analysis logs
+*.txt
+*.pdf
+*.html
+GameDump_CoreSections.lua
+WaterFX_dump.lua
+EVENT_River_Hunter_*.lua
+FishingHelper_2.lua
+FishingHelper_WindUI.lua
+FishingHelper_min.lua
+ZeluxHub_WindUI.lua
+check_identity.lua
+extract_*.lua
+test_*.lua
+test_*.luau
+zyronx_library.lua
+prompt.txt
+river_hunter_boat_navigation_patch_spec.md
+*.py
+
+GEMINI.md
